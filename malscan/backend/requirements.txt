@@ -5,3 +5,20 @@ python-multipart==0.0.9
 python-dotenv==1.1.0
 requests==2.32.3
 pefile==2024.8.26
+
+# Threat intelligence (abuse.ch feeds — no key required)
+# MalwareBazaar, ThreatFox, URLhaus clients use requests (already listed above)
+
+# YARA scanning — install separately if on Windows:
+#   pip install yara-python
+# On Windows you may need Visual C++ build tools first:
+#   https://visualstudio.microsoft.com/visual-cpp-build-tools/
+# The engine runs fine without it — YARA will be skipped gracefully.
+# yara-python>=4.3.0
+
+# Optional: AbuseIPDB IP reputation
+# No extra package needed — uses requests (already listed)
+# Add ABUSEIPDB_API_KEY to backend/.env for IP reputation checks
+
+# Document analysis uses only stdlib (zipfile, re, struct, math)
+# No additional packages required for PDF/Office/OLE detection

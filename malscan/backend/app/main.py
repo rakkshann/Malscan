@@ -12,9 +12,14 @@ Changes made by Team Member 4:
   - Store original_filename in job for the report
 """
 
-import hashlib, os, uuid, sys, time, zipfile, tempfile
+import hashlib, os, uuid, sys, time, zipfile, tempfile, shutil
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+
+# ── Safety limits ─────────────────────────────────────────────────────────────
+MAX_UPLOAD_BYTES      = 50  * 1024 * 1024   # 50 MB hard cap
+MAX_DECOMPRESSED_BYTES = 200 * 1024 * 1024  # 200 MB total decompressed
+MAX_ZIP_FILE_COUNT    = 500                  # files inside a ZIP
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, UploadFile, File, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,12 +36,18 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 try:
-    from analysis_engine.static_analyzer import extract_iocs, analyze_pe
+    from analysis_engine.static_analyzer import extract_iocs, analyze_pe, analyze_suspicious_strings
     from analysis_engine.osint_enricher import get_whois, get_dns_records, get_geoip
     from analysis_engine.url_processor import analyze_url
     from analysis_engine.vt_client import get_url_report, get_file_report
     from analysis_engine.urlscan_client import scan_url as urlscan_scan
     from analysis_engine.apk_analyzer import analyze_apk
+    from analysis_engine.document_analyzer import analyze_document
+    from analysis_engine.yara_scanner import scan_file as yara_scan_file
+    from analysis_engine.malwarebazaar_client import check_hash as mb_check_hash
+    from analysis_engine.threatfox_client import check_iocs as tf_check_iocs
+    from analysis_engine.urlhaus_client import check_urls as uh_check_urls
+    from analysis_engine.abuseipdb_client import check_ips as ab_check_ips
     from attribution_module.scoring import calculate_score
     from attribution_module.clustering import cluster_iocs
     from attribution_module.reporter import generate_report, get_report_path
@@ -108,20 +119,33 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
         # ── 1b. ZIP Extraction (Zip-Slip safe) ────────────────────────────────
         is_zip = zipfile.is_zipfile(file_path)
         if is_zip and not original_filename.lower().endswith(".apk"):
+            extract_dir = None
             try:
                 extract_dir = tempfile.mkdtemp(prefix="malscan_zip_")
                 with zipfile.ZipFile(file_path, "r") as zf:
-                    for member in zf.infolist():
-                        # ── Zip Slip protection: reject paths that escape extract_dir ──
+                    members = zf.infolist()
+
+                    # ── ZIP bomb: too many files ──────────────────────────────
+                    if len(members) > MAX_ZIP_FILE_COUNT:
+                        print(f"ZIP bomb blocked: {len(members)} files exceeds limit of {MAX_ZIP_FILE_COUNT}")
+                        members = members[:MAX_ZIP_FILE_COUNT]
+
+                    total_decompressed = 0
+                    for member in members:
+                        # ── ZIP bomb: decompressed size limit ─────────────────
+                        total_decompressed += member.file_size
+                        if total_decompressed > MAX_DECOMPRESSED_BYTES:
+                            print(f"ZIP bomb blocked: decompressed size exceeds {MAX_DECOMPRESSED_BYTES // 1024 // 1024} MB")
+                            break
+
+                        # ── Zip Slip protection ───────────────────────────────
                         member_path = os.path.realpath(os.path.join(extract_dir, member.filename))
                         if not member_path.startswith(os.path.realpath(extract_dir)):
                             print(f"Zip Slip blocked: {member.filename}")
                             continue
-                        # Skip directories
                         if member.is_dir():
                             os.makedirs(member_path, exist_ok=True)
                             continue
-                        # Ensure parent dir exists then extract single member
                         os.makedirs(os.path.dirname(member_path), exist_ok=True)
                         with zf.open(member) as src, open(member_path, "wb") as dst:
                             dst.write(src.read())
@@ -144,14 +168,27 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
                             })
             except Exception as ze:
                 print(f"ZIP extraction error: {ze}")
+            finally:
+                # Always clean up temp extraction directory
+                if extract_dir and os.path.exists(extract_dir):
+                    shutil.rmtree(extract_dir, ignore_errors=True)
 
         # ── 1c. APK Analysis ─────────────────────────────────────────────────
         if original_filename.lower().endswith(".apk"):
             apk_info = analyze_apk(file_path)
-            # Merge APK-extracted IOCs
             for k in ("ips", "urls"):
                 apk_key = f"dex_{k}"
                 iocs[k] = list(set(iocs.get(k, []) + apk_info.get(apk_key, [])))
+
+        # ── 1d. Document Analysis (PDF / Office / OLE) ───────────────────────
+        doc_info = analyze_document(file_path, original_filename)
+
+        # ── 1e. Suspicious string patterns ───────────────────────────────────
+        string_info = analyze_suspicious_strings(file_path)
+        pe_info["suspicious_strings"] = string_info.get("suspicious_strings", [])
+
+        # ── 1f. YARA scan ────────────────────────────────────────────────────
+        yara_result = yara_scan_file(file_path)
 
         # ── 2. OSINT Enrichment (concurrent) ──────────────────────────────────
         osint_data = {}
@@ -222,6 +259,25 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
                 _osint_executor, get_file_report, job.file_hash, vt_key, file_path
             )
 
+        # ── New: abuse.ch threat intelligence (no key required) ──────────────
+        futures["malwarebazaar"] = loop.run_in_executor(
+            _osint_executor, mb_check_hash, job.file_hash
+        )
+        if iocs.get("urls"):
+            futures["urlhaus"] = loop.run_in_executor(
+                _osint_executor, uh_check_urls, iocs.get("urls", [])
+            )
+        futures["threatfox"] = loop.run_in_executor(
+            _osint_executor, tf_check_iocs,
+            iocs.get("ips", []), iocs.get("domains", []),
+            iocs.get("urls", []), job.file_hash
+        )
+        ab_key = os.environ.get("ABUSEIPDB_API_KEY")
+        if public_ips and ab_key:
+            futures["abuseipdb"] = loop.run_in_executor(
+                _osint_executor, ab_check_ips, public_ips, ab_key
+            )
+
         # Await all concurrently
         async def _gather_osint():
             results = {}
@@ -254,18 +310,28 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
             if "error" not in vt_file_result and "status" not in vt_file_result:
                 osint_data["virustotal"] = vt_file_result
 
+        # New threat intel feeds
+        for key in ("malwarebazaar", "threatfox", "urlhaus", "abuseipdb"):
+            if key in osint_results and "error" not in (osint_results[key] or {}):
+                osint_data[key] = osint_results[key]
+
         # ── 3. Build analysis_data for scoring ───────────────────────────────
         analysis_data = {
             "file_hash": job.file_hash,
             "static": {
                 "suspicious_sections": pe_info.get("suspicious_sections", []),
-                "is_pe":    pe_info.get("is_pe", False),
-                "imphash":  pe_info.get("imphash"),
+                "is_pe":               pe_info.get("is_pe", False),
+                "imphash":             pe_info.get("imphash"),
+                "file_entropy":        pe_info.get("file_entropy", 0.0),
+                "magic_type":          pe_info.get("magic_type", "Unknown"),
+                "type_mismatch":       pe_info.get("type_mismatch", False),
+                "suspicious_strings":  pe_info.get("suspicious_strings", []),
             },
-            "osint": osint_data,
-            "url":   analyze_url(_pick_best_url(iocs.get("urls", [])) or (iocs["urls"][0] if iocs.get("urls") else "")) if iocs.get("urls") else {},
-            "iocs":  iocs,
-            "apk":   apk_info,
+            "osint":    {**osint_data, "yara": yara_result},
+            "url":      analyze_url(_pick_best_url(iocs.get("urls", [])) or (iocs["urls"][0] if iocs.get("urls") else "")) if iocs.get("urls") else {},
+            "iocs":     iocs,
+            "apk":      apk_info,
+            "document": doc_info,
         }
 
         # ── 4. Attribution Scoring ───────────────────────────────────────────
@@ -300,6 +366,10 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
             score_data["archive_contents"] = archive_contents
         if apk_info.get("is_apk"):
             score_data["apk_info"] = apk_info
+        if doc_info and doc_info.get("doc_type") not in (None, "unknown"):
+            score_data["document_info"] = doc_info
+        if yara_result.get("yara_matches"):
+            score_data["yara_matches"] = yara_result["yara_matches"]
 
         job.results = score_data
         job.status  = "Completed"
@@ -317,7 +387,9 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
 
 @app.post("/upload")
 async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    content = await file.read()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File exceeds maximum allowed size of {MAX_UPLOAD_BYTES // 1024 // 1024} MB.")
     file_hash = hashlib.sha256(content).hexdigest()
 
     file_path = os.path.join(VAULT_DIR, file_hash)

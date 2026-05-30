@@ -3,6 +3,8 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -98,92 +100,101 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={s.safe}>
-      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <ScrollView
+          contentContainerStyle={s.scroll}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
 
-        {/* ── Top bar ────────────────────────────────────────────────────── */}
-        <View style={s.topBar}>
-          <TouchableOpacity style={s.topBtn} onPress={() => router.push('/history')}>
-            <Text style={s.topBtnText}>History</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={s.topBtn} onPress={() => router.push('/settings')}>
-            <Text style={s.topBtnText}>Settings</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* ── Hero ───────────────────────────────────────────────────────── */}
-        <View style={s.hero}>
-          <Animated.View style={[s.iconCircle, { transform: [{ scale: pulse }] }]}>
-            <Text style={s.iconGlyph}>🛡</Text>
-          </Animated.View>
-          <Text style={s.appName}>MalScan</Text>
-          <Text style={s.tagline}>Scan before you open</Text>
-        </View>
-
-        {/* ── How it works ───────────────────────────────────────────────── */}
-        <View style={s.card}>
-          <Text style={s.cardTitle}>How to scan a WhatsApp file</Text>
-          {HOW_TO_STEPS.map(step => (
-            <View key={step.num} style={s.step}>
-              <View style={s.stepNum}>
-                <Text style={s.stepNumText}>{step.num}</Text>
-              </View>
-              <Text style={s.stepText}>{step.text}</Text>
-            </View>
-          ))}
-        </View>
-
-        {/* ── Pick from device ───────────────────────────────────────────── */}
-        <View style={s.card}>
-          <Text style={s.cardTitle}>Or pick a file from your device</Text>
-          <TouchableOpacity
-            style={[s.primaryBtn, isPicking && s.primaryBtnDisabled]}
-            onPress={handlePickFile}
-            activeOpacity={0.8}
-            disabled={isPicking}
-          >
-            {isPicking
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={s.primaryBtnText}>Select File</Text>
-            }
-          </TouchableOpacity>
-        </View>
-
-        {/* ── Scan a URL ─────────────────────────────────────────────────── */}
-        <View style={s.card}>
-          <Text style={s.cardTitle}>Scan a link</Text>
-          <View style={s.urlRow}>
-            <TextInput
-              style={s.urlInput}
-              value={urlInput}
-              onChangeText={setUrlInput}
-              placeholder="https://suspicious-link.com"
-              placeholderTextColor={colors.text.muted}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-              returnKeyType="go"
-              onSubmitEditing={handleScanUrl}
-            />
-            <TouchableOpacity style={s.urlBtn} onPress={handleScanUrl} activeOpacity={0.8}>
-              <Text style={s.urlBtnText}>Scan</Text>
+          {/* ── Top bar ────────────────────────────────────────────────────── */}
+          <View style={s.topBar}>
+            <TouchableOpacity style={s.topBtn} onPress={() => router.push('/history')}>
+              <Text style={s.topBtnText}>History</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.topBtn} onPress={() => router.push('/settings')}>
+              <Text style={s.topBtnText}>Settings</Text>
             </TouchableOpacity>
           </View>
-        </View>
 
-        {/* ── Status footer ──────────────────────────────────────────────── */}
-        <TouchableOpacity style={s.statusRow} onPress={runHealthCheck} activeOpacity={0.7}>
-          {connStatus === 'checking'
-            ? <ActivityIndicator color={dotColor} size={10} />
-            : <View style={[s.statusDot, { backgroundColor: dotColor }]} />
-          }
-          <Text style={[s.statusText, { color: dotColor }]}>
-            {connStatus === 'online'  ? 'Connected to scan engine'
-            : connStatus === 'offline' ? 'Engine offline — tap to retry'
-            : 'Connecting...'}
-          </Text>
-        </TouchableOpacity>
+          {/* ── Hero ───────────────────────────────────────────────────────── */}
+          <View style={s.hero}>
+            <Animated.View style={[s.iconCircle, { transform: [{ scale: pulse }] }]}>
+              <Text style={s.iconGlyph}>🛡</Text>
+            </Animated.View>
+            <Text style={s.appName}>MalScan</Text>
+            <Text style={s.tagline}>Scan before you open</Text>
+          </View>
 
-      </ScrollView>
+          {/* ── How it works ───────────────────────────────────────────────── */}
+          <View style={s.card}>
+            <Text style={s.cardTitle}>How to scan a WhatsApp file</Text>
+            {HOW_TO_STEPS.map(step => (
+              <View key={step.num} style={s.step}>
+                <View style={s.stepNum}>
+                  <Text style={s.stepNumText}>{step.num}</Text>
+                </View>
+                <Text style={s.stepText}>{step.text}</Text>
+              </View>
+            ))}
+          </View>
+
+          {/* ── Pick from device ───────────────────────────────────────────── */}
+          <View style={s.card}>
+            <Text style={s.cardTitle}>Or pick a file from your device</Text>
+            <TouchableOpacity
+              style={[s.primaryBtn, isPicking && s.primaryBtnDisabled]}
+              onPress={handlePickFile}
+              activeOpacity={0.8}
+              disabled={isPicking}
+            >
+              {isPicking
+                ? <ActivityIndicator color="#fff" />
+                : <Text style={s.primaryBtnText}>Select File</Text>
+              }
+            </TouchableOpacity>
+          </View>
+
+          {/* ── Scan a URL ─────────────────────────────────────────────────── */}
+          <View style={s.card}>
+            <Text style={s.cardTitle}>Scan a link</Text>
+            <View style={s.urlRow}>
+              <TextInput
+                style={s.urlInput}
+                value={urlInput}
+                onChangeText={setUrlInput}
+                placeholder="https://suspicious-link.com"
+                placeholderTextColor={colors.text.muted}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                returnKeyType="go"
+                onSubmitEditing={handleScanUrl}
+              />
+              <TouchableOpacity style={s.urlBtn} onPress={handleScanUrl} activeOpacity={0.8}>
+                <Text style={s.urlBtnText}>Scan</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* ── Status footer ──────────────────────────────────────────────── */}
+          <TouchableOpacity style={s.statusRow} onPress={runHealthCheck} activeOpacity={0.7}>
+            {connStatus === 'checking'
+              ? <ActivityIndicator color={dotColor} size={10} />
+              : <View style={[s.statusDot, { backgroundColor: dotColor }]} />
+            }
+            <Text style={[s.statusText, { color: dotColor }]}>
+              {connStatus === 'online'  ? 'Connected to scan engine'
+              : connStatus === 'offline' ? 'Engine offline — tap to retry'
+              : 'Connecting...'}
+            </Text>
+          </TouchableOpacity>
+
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   )
 }

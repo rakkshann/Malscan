@@ -116,11 +116,12 @@ export default function ScanningScreen() {
           <View style={s.shieldCircle}>
             <Text style={s.shieldGlyph}>🛡</Text>
           </View>
-          <Text style={s.analysingText}>Analysing your file</Text>
+          <Text style={s.analysingText}>{url ? 'Analysing link' : 'Analysing your file'}</Text>
           <Text style={s.sourceText}>
-            {source === 'intent' || source === 'share'
-              ? 'Received from another app'
-              : 'Selected from device'}
+            {source === 'manual' ? 'Link submitted for analysis'
+            : source === 'share' ? 'URL received via share'
+            : source === 'intent' ? 'File received from another app'
+            : 'Selected from device'}
           </Text>
         </View>
 

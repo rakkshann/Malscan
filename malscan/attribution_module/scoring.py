@@ -300,6 +300,144 @@ def _check_apk_permissions(apk_data):
     return score, reasons
 
 
+# ── New threat intelligence checks ──────────────────────────────────────────
+
+def _check_malwarebazaar(osint: dict):
+    mb = osint.get("malwarebazaar", {}) or {}
+    if mb.get("found"):
+        name = mb.get("threat_name") or mb.get("signature") or "Unknown malware"
+        first = mb.get("first_seen", "Unknown")
+        return 100, [f"File hash confirmed in MalwareBazaar: {name} (first seen {first})."]
+    return 0, []
+
+
+def _check_threatfox(osint: dict):
+    tf = osint.get("threatfox", {}) or {}
+    if tf.get("found"):
+        malware = tf.get("malware_printable") or tf.get("malware") or "Unknown"
+        confidence = tf.get("confidence", "?")
+        ioc = tf.get("matched_ioc", "")
+        return 70, [f"IOC found in ThreatFox: {malware} (confidence {confidence}%) — matched '{ioc}'."]
+    return 0, []
+
+
+def _check_urlhaus(osint: dict):
+    uh = osint.get("urlhaus", {}) or {}
+    if uh.get("found"):
+        threat = uh.get("threat") or "malware distribution"
+        url = uh.get("matched_url", "")
+        return 60, [f"URL found in URLhaus malware database ({threat}): {url[:60]}"]
+    return 0, []
+
+
+def _check_abuseipdb(osint: dict):
+    ab = osint.get("abuseipdb", {}) or {}
+    if ab.get("skipped"):
+        return 0, []
+    confidence = ab.get("abuse_confidence", 0)
+    ip = ab.get("checked_ip", "")
+    if confidence >= 80:
+        return 40, [f"IP {ip} has {confidence}% abuse confidence on AbuseIPDB — high-risk infrastructure."]
+    if confidence >= 50:
+        return 20, [f"IP {ip} has elevated abuse confidence score ({confidence}%) on AbuseIPDB."]
+    return 0, []
+
+
+def _check_document_threats(doc_data: dict):
+    score, reasons = 0, []
+    if not doc_data or doc_data.get("doc_type") == "unknown":
+        return score, reasons
+
+    if doc_data.get("has_javascript"):
+        score += 40
+        reasons.append("PDF contains embedded JavaScript — can execute code when the file is opened.")
+    if doc_data.get("has_auto_action"):
+        score += 35
+        reasons.append("PDF has an automatic action that triggers on open without user interaction.")
+    if doc_data.get("has_launch_action"):
+        score += 45
+        reasons.append("PDF contains a Launch action — can execute external programs on your device.")
+    if doc_data.get("has_embedded_files"):
+        score += 20
+        reasons.append("PDF contains embedded files — unusual for a legitimate document.")
+    if doc_data.get("has_macros"):
+        score += 45
+        reasons.append("Office document contains VBA macros — the primary delivery mechanism for macro malware.")
+    kws = doc_data.get("suspicious_macro_keywords") or []
+    if kws:
+        score += 20
+        reasons.append(f"Dangerous macro patterns detected: {', '.join(kws[:4])}.")
+    for flag in (doc_data.get("suspicious_flags") or []):
+        if flag not in " ".join(reasons):
+            score += 5
+
+    return min(score, 90), reasons
+
+
+def _check_yara(osint: dict):
+    yara_data = osint.get("yara", {}) or {}
+    matches = yara_data.get("yara_matches") or []
+    if not matches:
+        return 0, []
+    critical = [m for m in matches if m.get("severity") == "critical"]
+    high     = [m for m in matches if m.get("severity") == "high"]
+    if critical:
+        score = min(len(critical) * 40 + len(high) * 20, 100)
+    else:
+        score = min(len(high) * 25, 80)
+    reasons = [f"YARA: {m['description']}" for m in matches[:4]]
+    return score, reasons
+
+
+_NATURALLY_COMPRESSED = {
+    "PDF Document",
+    "ZIP Archive / Office Open XML / APK / JAR",
+    "GZIP Compressed",
+    "BZIP2 Compressed",
+    "7-Zip Archive",
+    "RAR Archive",
+    "Microsoft Cabinet (CAB) File",
+}
+
+_ENTROPY_BASELINE_STRINGS = {
+    "Large base64 blob — possible encoded payload",
+}
+
+
+def _check_enhanced_static(static: dict):
+    score, reasons = 0, []
+    magic_type = static.get("magic_type", "Unknown")
+
+    # PDFs and compressed archives are inherently high-entropy — skip that check
+    # to avoid false positives on legitimate documents.
+    is_compressed = magic_type in _NATURALLY_COMPRESSED
+
+    entropy = static.get("file_entropy", 0)
+    if not is_compressed:
+        if entropy > 7.2:
+            score += 15
+            reasons.append(f"Very high file entropy ({entropy}) — file appears to be packed or encrypted.")
+        elif entropy > 6.8:
+            score += 8
+            reasons.append(f"Elevated file entropy ({entropy}) — may contain compressed or obfuscated content.")
+
+    if static.get("type_mismatch"):
+        score += 30
+        reasons.append(
+            f"File type mismatch: claims to be {static.get('extension', 'unknown')} "
+            f"but is actually {static.get('magic_type', 'unknown')} — deliberate disguise."
+        )
+
+    for flag in (static.get("suspicious_strings") or [])[:5]:
+        # Skip base64 blob flag for PDFs/compressed — base64 is used normally for images/fonts
+        if is_compressed and flag in _ENTROPY_BASELINE_STRINGS:
+            continue
+        score += 8
+        reasons.append(f"Suspicious code pattern: {flag}")
+
+    return min(score, 60), reasons
+
+
 # ── Known-hash check ─────────────────────────────────────────────────────────
 
 def _check_known_hashes(file_hash: Optional[str]):
@@ -329,25 +467,40 @@ def calculate_score(analysis_data: dict) -> dict:
     family, attribution = None, None
     age = None  # populated by heuristic score path only
 
-    # ── Hash-based detection (highest priority — short-circuit if matched) ────
+    # ── Tier 1: Definitive hash matches (short-circuit if confirmed malware) ──
     file_hash = analysis_data.get("file_hash")
+
+    # Internal blocklist
     hash_score, hash_reasons, hash_family, hash_attribution = _check_known_hashes(file_hash)
     if hash_score > 0:
-        total += hash_score
-        all_reasons += hash_reasons
-        family = hash_family
-        attribution = hash_attribution
-    else:
-        # ── Heuristic scoring (only run if no direct hash match) ──────────────
-        s, r      = _check_pe_sections(static);    total += s; all_reasons += r
-        s, r, age = _check_domain_age(whois);      total += s; all_reasons += r
-        s, r      = _check_registrar(whois);       total += s; all_reasons += r
-        s, r      = _check_geoip(geoip);           total += s; all_reasons += r
-        s, r      = _check_url_flags(url_data);    total += s; all_reasons += r
-        s, r      = _check_ioc_volume(iocs);       total += s; all_reasons += r
-        s, r      = _check_virustotal(osint);      total += s; all_reasons += r
-        s, r      = _check_urlscan(osint);         total += s; all_reasons += r
-        s, r      = _check_apk_permissions(analysis_data.get("apk", {})); total += s; all_reasons += r
+        total += hash_score; all_reasons += hash_reasons
+        family = hash_family; attribution = hash_attribution
+
+    # MalwareBazaar (external, authoritative hash DB)
+    s, r = _check_malwarebazaar(osint); total += s; all_reasons += r
+
+    # YARA rule matches (pattern-based, very high confidence)
+    s, r = _check_yara(osint); total += s; all_reasons += r
+
+    # ── Tier 2: IOC-based threat intelligence ─────────────────────────────────
+    s, r = _check_threatfox(osint);  total += s; all_reasons += r
+    s, r = _check_urlhaus(osint);    total += s; all_reasons += r
+    s, r = _check_abuseipdb(osint);  total += s; all_reasons += r
+
+    # ── Tier 3: Document-specific threats ─────────────────────────────────────
+    s, r = _check_document_threats(analysis_data.get("document", {})); total += s; all_reasons += r
+
+    # ── Tier 4: Heuristic signals (always run) ────────────────────────────────
+    s, r      = _check_enhanced_static(static);    total += s; all_reasons += r
+    s, r      = _check_pe_sections(static);        total += s; all_reasons += r
+    s, r, age = _check_domain_age(whois);          total += s; all_reasons += r
+    s, r      = _check_registrar(whois);           total += s; all_reasons += r
+    s, r      = _check_geoip(geoip);               total += s; all_reasons += r
+    s, r      = _check_url_flags(url_data);        total += s; all_reasons += r
+    s, r      = _check_ioc_volume(iocs);           total += s; all_reasons += r
+    s, r      = _check_virustotal(osint);          total += s; all_reasons += r
+    s, r      = _check_urlscan(osint);             total += s; all_reasons += r
+    s, r      = _check_apk_permissions(analysis_data.get("apk", {})); total += s; all_reasons += r
 
     final_score = min(total, 100)
     verdict = "Malicious" if final_score >= 70 else "Suspicious" if final_score >= 35 else "Clear"
