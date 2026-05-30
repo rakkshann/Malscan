@@ -54,7 +54,8 @@ async function copyToClipboard(value: string, label: string) {
 }
 
 function UrlScanSection({ us }: { us: UrlScanResult }) {
-  if (us.error && !us.page_title && !us.page_ip) return null
+  const hasData = us.is_malicious || us.verdict_score > 0 || us.page_title || us.page_ip || us.page_country
+  if (!hasData) return null
   return (
     <View style={styles.card}>
       <View style={styles.cardHeaderRow}>
@@ -78,9 +79,10 @@ function UrlScanSection({ us }: { us: UrlScanResult }) {
 }
 
 export default function VerdictScreen() {
-  const { jobId, originalUri } = useLocalSearchParams<{
+  const { jobId, originalUri, mimeType } = useLocalSearchParams<{
     jobId: string
     originalUri?: string
+    mimeType?: string
   }>()
 
   const [results, setResults] = useState<ScanResults | null>(null)
@@ -127,7 +129,7 @@ export default function VerdictScreen() {
       return
     }
     try {
-      await openFileNatively(originalUri)
+      await openFileNatively(originalUri, mimeType || undefined)
       const cached = `${FileSystem.cacheDirectory}malscan_upload`
       await FileSystem.deleteAsync(cached, { idempotent: true })
     } catch {

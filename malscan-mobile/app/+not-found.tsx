@@ -9,18 +9,22 @@ export default function NotFound() {
 
   useEffect(() => {
     if (!pathname || pathname === '/') return
-    // When Android opens a file with MalScan (ACTION_VIEW), the content:// URI
-    // arrives as malscan:///provider/path. Expo-router can't match the path so
-    // it lands here. Reconstruct content:// and send straight to scanning.
+
     const contentUri = 'content:/' + pathname
-    router.replace({
-      pathname: '/scanning',
-      params: {
-        uri: contentUri,
-        filename: pathname.split('/').pop() || 'file',
-        source: 'intent',
-      },
-    })
+    const segments = pathname.split('/').filter(Boolean)
+    const lastSegment = segments[segments.length - 1] || 'shared_file'
+    const filename = decodeURIComponent(lastSegment)
+
+    // Defer navigation — the Root Layout may not have mounted yet when an
+    // Android intent triggers this screen directly on cold start.
+    const timer = setTimeout(() => {
+      router.replace({
+        pathname: '/scanning',
+        params: { uri: contentUri, filename, source: 'intent' },
+      })
+    }, 150)
+
+    return () => clearTimeout(timer)
   }, [])
 
   return <View style={{ flex: 1, backgroundColor: COLORS.background }} />

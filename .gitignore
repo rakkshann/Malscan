@@ -44,6 +44,7 @@ malscan-mobile/.next/
 test_archive.zip
 eicar.txt
 *.zip
+Test files apk/
 
 # ── OS / IDE ──────────────────────────────────────────────────────────────────
 .DS_Store

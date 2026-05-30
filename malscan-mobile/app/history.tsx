@@ -18,7 +18,11 @@ function HistoryCard({ item }: { item: ScanSummary }) {
     date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
   return (
-    <View style={styles.card}>
+    <TouchableOpacity
+      style={styles.card}
+      onPress={() => router.push({ pathname: '/verdict', params: { jobId: item.jobId } })}
+      activeOpacity={0.75}
+    >
       <View style={styles.cardTop}>
         <Text style={styles.target} numberOfLines={1}>{item.target}</Text>
         <View style={[styles.badge, { borderColor: color + '40', backgroundColor: color + '18' }]}>
@@ -30,7 +34,8 @@ function HistoryCard({ item }: { item: ScanSummary }) {
         <Text style={styles.meta}>{item.family}</Text>
         <Text style={styles.date}>{dateStr}</Text>
       </View>
-    </View>
+      <Text style={styles.tapHint}>TAP TO VIEW REPORT →</Text>
+    </TouchableOpacity>
   )
 }
 
@@ -140,6 +145,14 @@ const styles = StyleSheet.create({
   cardBottom: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   meta: { fontFamily: FONT.mono, fontSize: 9, color: COLORS.text.muted, letterSpacing: 1 },
   date: { fontFamily: FONT.mono, fontSize: 9, color: COLORS.text.muted, marginLeft: 'auto' },
+  tapHint: {
+    fontFamily: FONT.mono,
+    fontSize: 8,
+    color: COLORS.text.muted,
+    letterSpacing: 1,
+    marginTop: 6,
+    textAlign: 'right',
+  },
 
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   emptyGlyph: { fontSize: 36, color: COLORS.text.muted },

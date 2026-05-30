@@ -15,6 +15,9 @@ const SIZE = (RADIUS + STROKE) * 2
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS
 const CENTER = RADIUS + STROKE
 
+// Minimum visible arc even at score 0 (2% of circumference)
+const MIN_PROGRESS = 0.02
+
 const AnimatedCircle = Animated.createAnimatedComponent(Circle)
 
 interface Props {
@@ -26,7 +29,8 @@ export function ThreatScoreGauge({ score, color }: Props) {
   const progress = useSharedValue(0)
 
   useEffect(() => {
-    progress.value = withTiming(score / 100, {
+    const target = score === 0 ? MIN_PROGRESS : score / 100
+    progress.value = withTiming(target, {
       duration: 1400,
       easing: Easing.out(Easing.cubic),
     })
@@ -39,12 +43,12 @@ export function ThreatScoreGauge({ score, color }: Props) {
   return (
     <View style={styles.wrapper}>
       <Svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
-        {/* Track */}
+        {/* Track — visible on dark backgrounds */}
         <Circle
           cx={CENTER}
           cy={CENTER}
           r={RADIUS}
-          stroke={COLORS.border}
+          stroke="#2E2E2E"
           strokeWidth={STROKE}
           fill="none"
         />
@@ -70,7 +74,7 @@ export function ThreatScoreGauge({ score, color }: Props) {
           fontSize="42"
           fontWeight="bold"
           fill={color}
-          fontFamily="Courier New"
+          fontFamily="monospace"
         >
           {score}
         </SvgText>
@@ -81,7 +85,7 @@ export function ThreatScoreGauge({ score, color }: Props) {
           textAnchor="middle"
           fontSize="11"
           fill={COLORS.text.secondary}
-          fontFamily="Courier New"
+          fontFamily="monospace"
         >
           / 100
         </SvgText>

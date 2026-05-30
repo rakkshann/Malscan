@@ -3,15 +3,11 @@ import { useEffect, useState } from 'react'
 export interface FileIntent {
   uri: string | null
   text: string | null
+  mimeType: string | null
 }
 
-/**
- * Intercepts files/URLs shared to the app via Android intents.
- * Wrapped in dynamic import + try/catch so a native-module load failure
- * degrades gracefully instead of crashing the whole app.
- */
 export function useFileIntent(): FileIntent {
-  const [intent, setIntent] = useState<FileIntent>({ uri: null, text: null })
+  const [intent, setIntent] = useState<FileIntent>({ uri: null, text: null, mimeType: null })
 
   useEffect(() => {
     let mounted = true
@@ -27,14 +23,15 @@ export function useFileIntent(): FileIntent {
             const f = files[0]
             const uri = f.contentUri || f.filePath || null
             const text = f.webLink || f.text || null
-            if (uri) setIntent({ uri, text: null })
-            else if (text) setIntent({ uri: null, text })
+            const mimeType = f.mimeType || null
+            if (uri) setIntent({ uri, text: null, mimeType })
+            else if (text) setIntent({ uri: null, text, mimeType: null })
           },
           (error: unknown) => console.warn('[MalScan] ReceiveSharingIntent error:', error),
           'malscan',
         )
       } catch (e) {
-        console.warn('[MalScan] ReceiveSharingIntent not available — intent sharing disabled:', e)
+        console.warn('[MalScan] ReceiveSharingIntent not available:', e)
       }
     }
 
@@ -43,10 +40,7 @@ export function useFileIntent(): FileIntent {
     return () => {
       mounted = false
       import('react-native-receive-sharing-intent')
-        .then(mod => {
-          const RSI = mod.default ?? mod
-          RSI.clearReceivedFiles?.()
-        })
+        .then(mod => { const RSI = mod.default ?? mod; RSI.clearReceivedFiles?.() })
         .catch(() => {})
     }
   }, [])

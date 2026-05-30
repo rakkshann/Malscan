@@ -31,11 +31,12 @@ const PHASES = [
 ] as const
 
 export default function ScanningScreen() {
-  const { uri, url, filename, source } = useLocalSearchParams<{
+  const { uri, url, filename, source, mimeType } = useLocalSearchParams<{
     uri?: string
     url?: string
     filename?: string
     source?: string
+    mimeType?: string
   }>()
 
   const [jobId, setJobId] = useState<string | null>(null)
@@ -127,7 +128,7 @@ export default function ScanningScreen() {
       setTimeout(() => {
         router.replace({
           pathname: '/verdict',
-          params: { jobId: scanResult.job_id, originalUri: uri || '' },
+          params: { jobId: scanResult.job_id, originalUri: uri || '', mimeType: mimeType || '' },
         })
       }, 700)
     }

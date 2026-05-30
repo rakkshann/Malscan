@@ -147,11 +147,21 @@ export async function openFileNatively(
   mimeType?: string,
 ): Promise<void> {
   const { startActivityAsync } = await import('expo-intent-launcher')
-  const mime = mimeType ?? guessMime(contentUri)
+
+  // Prefer the caller-supplied MIME type; fall back to extension guess.
+  // Never pass 'application/octet-stream' — Android has no generic handler
+  // for it and the chooser fails. Omitting the type lets Android detect it
+  // from the content provider, which works for all common file types.
+  const guessed = guessMime(contentUri)
+  const resolved =
+    mimeType && mimeType !== 'application/octet-stream' ? mimeType
+    : guessed !== 'application/octet-stream' ? guessed
+    : undefined
+
   await startActivityAsync('android.intent.action.VIEW', {
     data: contentUri,
     flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
-    type: mime,
+    ...(resolved ? { type: resolved } : {}),
   })
 }
 

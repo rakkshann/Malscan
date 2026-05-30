@@ -19,7 +19,7 @@ import { checkHealth } from '../services/api'
 type ConnStatus = 'checking' | 'online' | 'offline'
 
 export default function HomeScreen() {
-  const { uri: intentUri, text: intentText } = useFileIntent()
+  const { uri: intentUri, text: intentText, mimeType: intentMimeType } = useFileIntent()
   const [urlInput, setUrlInput] = useState('')
   const [isPicking, setIsPicking] = useState(false)
   const [connStatus, setConnStatus] = useState<ConnStatus>('checking')
@@ -58,7 +58,10 @@ export default function HomeScreen() {
   useEffect(() => {
     if (!intentUri) return
     const name = intentUri.split('/').pop() || 'scan_target'
-    router.push({ pathname: '/scanning', params: { uri: intentUri, filename: name, source: 'intent' } })
+    router.push({
+      pathname: '/scanning',
+      params: { uri: intentUri, filename: name, source: 'intent', mimeType: intentMimeType || '' },
+    })
   }, [intentUri])
 
   useEffect(() => {
@@ -76,8 +79,11 @@ export default function HomeScreen() {
         multiple: false,
       })
       if (!result.canceled && result.assets[0]) {
-        const { uri, name } = result.assets[0]
-        router.push({ pathname: '/scanning', params: { uri, filename: name, source: 'picker' } })
+        const { uri, name, mimeType } = result.assets[0]
+        router.push({
+          pathname: '/scanning',
+          params: { uri, filename: name, source: 'picker', mimeType: mimeType || '' },
+        })
       }
     } catch {
       Alert.alert('Error', 'Could not open file picker.')
