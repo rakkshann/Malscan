@@ -1,0 +1,195 @@
+"""
+analysis_engine/vt_client.py
+VirusTotal v3 API client for URL and file threat intelligence.
+Supports hash lookups and automatic file upload for unknown samples.
+"""
+
+import base64
+import os
+import requests
+import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def get_url_report(url: str, api_key: str) -> dict:
+    """
+    Queries VirusTotal for a URL report. If no report exists, submits
+    the URL for scanning and polls for results.
+
+    Returns dict with 'stats' (malicious/suspicious/harmless/undetected counts)
+    and 'reputation' score, or an 'error' key on failure.
+    """
+    if not api_key:
+        return {"error": "No VT API key provided"}
+
+    url_id = base64.urlsafe_b64encode(url.encode()).decode().strip("=")
+    headers = {"x-apikey": api_key, "accept": "application/json"}
+
+    try:
+        # 1. Check if VT already has a report for this URL
+        endpoint = f"https://www.virustotal.com/api/v3/urls/{url_id}"
+        response = requests.get(endpoint, headers=headers, timeout=15)
+
+        if response.status_code == 200:
+            attrs = response.json().get("data", {}).get("attributes", {})
+            return {
+                "stats": attrs.get("last_analysis_stats", {}),
+                "reputation": attrs.get("reputation", 0),
+            }
+
+        elif response.status_code == 404:
+            # 2. URL not yet scanned — submit it
+            submit_res = requests.post(
+                "https://www.virustotal.com/api/v3/urls",
+                headers=headers,
+                data={"url": url},
+                timeout=15,
+            )
+            if submit_res.status_code == 200:
+                analysis_id = submit_res.json().get("data", {}).get("id")
+                # Poll up to 4 times (12 s total)
+                for _ in range(4):
+                    time.sleep(3)
+                    poll = requests.get(
+                        f"https://www.virustotal.com/api/v3/analyses/{analysis_id}",
+                        headers=headers,
+                        timeout=15,
+                    )
+                    if poll.status_code == 200:
+                        attrs = poll.json().get("data", {}).get("attributes", {})
+                        if attrs.get("status") == "completed":
+                            return {"stats": attrs.get("stats", {}), "reputation": 0}
+                return {"status": "queued", "message": "VT analysis still pending."}
+            return {"error": f"VT submit failed (HTTP {submit_res.status_code})"}
+
+        elif response.status_code == 429:
+            return {"error": "VT rate limit exceeded. Try again later."}
+        else:
+            return {"error": f"VT lookup failed (HTTP {response.status_code})"}
+
+    except requests.exceptions.Timeout:
+        return {"error": "VT request timed out."}
+    except Exception as e:
+        logger.error(f"VT error: {e}")
+        return {"error": str(e)}
+
+
+def upload_file(file_path: str, api_key: str) -> dict:
+    """
+    Uploads a file to VirusTotal for cloud detonation/scanning.
+    Polls for completion up to ~45 seconds.
+    Returns dict with 'stats' and metadata, or 'error' on failure.
+    """
+    if not api_key:
+        return {"error": "No VT API key provided"}
+    if not file_path:
+        return {"error": "No file path provided"}
+
+    headers = {"x-apikey": api_key}
+
+    try:
+        # Check file size — VT v3 requires /files/upload_url for files > 32MB
+        file_size = os.path.getsize(file_path)
+        if file_size > 32 * 1024 * 1024:
+            # Get a special upload URL for large files
+            large_resp = requests.get(
+                "https://www.virustotal.com/api/v3/files/upload_url",
+                headers={**headers, "accept": "application/json"},
+                timeout=15,
+            )
+            if large_resp.status_code != 200:
+                return {"error": f"VT large-file URL request failed (HTTP {large_resp.status_code})"}
+            upload_url = large_resp.json().get("data")
+        else:
+            upload_url = "https://www.virustotal.com/api/v3/files"
+
+        # Upload the file
+        with open(file_path, "rb") as f:
+            upload_resp = requests.post(
+                upload_url,
+                headers=headers,
+                files={"file": (os.path.basename(file_path), f)},
+                timeout=60,
+            )
+
+        if upload_resp.status_code != 200:
+            return {"error": f"VT file upload failed (HTTP {upload_resp.status_code})"}
+
+        analysis_id = upload_resp.json().get("data", {}).get("id")
+        if not analysis_id:
+            return {"error": "VT upload succeeded but no analysis ID returned."}
+
+        logger.info(f"File uploaded to VT, analysis ID: {analysis_id}")
+
+        # Poll for results (up to ~45s)
+        poll_headers = {**headers, "accept": "application/json"}
+        for attempt in range(9):
+            time.sleep(5)
+            poll = requests.get(
+                f"https://www.virustotal.com/api/v3/analyses/{analysis_id}",
+                headers=poll_headers,
+                timeout=15,
+            )
+            if poll.status_code == 200:
+                attrs = poll.json().get("data", {}).get("attributes", {})
+                if attrs.get("status") == "completed":
+                    return {
+                        "stats": attrs.get("stats", {}),
+                        "reputation": 0,
+                        "uploaded": True,
+                    }
+
+        return {"status": "queued", "message": "VT file analysis still pending after upload.", "uploaded": True}
+
+    except requests.exceptions.Timeout:
+        return {"error": "VT file upload timed out."}
+    except Exception as e:
+        logger.error(f"VT upload error: {e}")
+        return {"error": str(e)}
+
+
+def get_file_report(file_hash: str, api_key: str, file_path: str = None) -> dict:
+    """
+    Queries VirusTotal for a file report by SHA-256 hash.
+    If the hash is unknown and file_path is provided, automatically
+    uploads the file for cloud scanning.
+    Returns dict with 'stats' and 'reputation', or 'error' on failure.
+    """
+    if not api_key:
+        return {"error": "No VT API key provided"}
+    if not file_hash:
+        return {"error": "No file hash provided"}
+
+    headers = {"x-apikey": api_key, "accept": "application/json"}
+
+    try:
+        endpoint = f"https://www.virustotal.com/api/v3/files/{file_hash}"
+        response = requests.get(endpoint, headers=headers, timeout=15)
+
+        if response.status_code == 200:
+            attrs = response.json().get("data", {}).get("attributes", {})
+            return {
+                "stats": attrs.get("last_analysis_stats", {}),
+                "reputation": attrs.get("reputation", 0),
+                "type_description": attrs.get("type_description"),
+                "meaningful_name": attrs.get("meaningful_name"),
+                "popular_threat_classification": attrs.get("popular_threat_classification"),
+            }
+        elif response.status_code == 404:
+            # Hash not found — upload the file if we have it
+            if file_path and os.path.exists(file_path):
+                logger.info(f"Hash {file_hash[:16]}... unknown, uploading file to VT.")
+                return upload_file(file_path, api_key)
+            return {"status": "unknown", "message": "File not found in VirusTotal database."}
+        elif response.status_code == 429:
+            return {"error": "VT rate limit exceeded. Try again later."}
+        else:
+            return {"error": f"VT file lookup failed (HTTP {response.status_code})"}
+
+    except requests.exceptions.Timeout:
+        return {"error": "VT request timed out."}
+    except Exception as e:
+        logger.error(f"VT file error: {e}")
+        return {"error": str(e)}

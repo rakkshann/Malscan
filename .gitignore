@@ -1,0 +1,52 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.*
+
+# ── Web app (malscan/) ────────────────────────────────────────────────────────
+malscan/node_modules/
+malscan/.next/
+malscan/out/
+malscan/build/
+malscan/next-env.d.ts
+malscan/*.tsbuildinfo
+malscan/package-lock.json
+
+# Database — never commit the live SQLite DB
+malscan/backend/*.db
+malscan/backend/app/*.db
+
+# Vault — these are actual malware/suspicious files users uploaded
+malscan/backend/app/vault/*
+!malscan/backend/app/vault/.gitkeep
+
+# Generated HTML forensic reports
+malscan/reports/
+
+# Test/scratch files
+malscan/generate_test_files.py
+malscan/public_threat_test.txt
+malscan/test_files/
+
+# ── Mobile app (malscan-mobile/) ─────────────────────────────────────────────
+malscan-mobile/node_modules/
+malscan-mobile/.expo/
+malscan-mobile/android/build/
+malscan-mobile/android/app/build/
+malscan-mobile/android/.gradle/
+malscan-mobile/android/local.properties
+malscan-mobile/.next/
+
+# ── Root-level test/scratch files ────────────────────────────────────────────
+test_archive.zip
+eicar.txt
+*.zip
+
+# ── OS / IDE ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.pem
+.vercel

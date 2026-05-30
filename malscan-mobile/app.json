@@ -1,0 +1,64 @@
+{
+  "expo": {
+    "name": "MalScan",
+    "slug": "malscan-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "malscan",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0A0A0A"
+    },
+    "android": {
+      "package": "com.malscan.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#0A0A0A"
+      },
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "data": [
+            { "mimeType": "application/pdf" },
+            { "mimeType": "application/zip" },
+            { "mimeType": "application/vnd.android.package-archive" },
+            { "mimeType": "application/octet-stream" },
+            { "mimeType": "application/x-msdownload" },
+            { "mimeType": "application/x-dex" }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        },
+        {
+          "action": "SEND",
+          "data": [
+            { "mimeType": "*/*" },
+            { "mimeType": "text/plain" },
+            { "mimeType": "application/pdf" },
+            { "mimeType": "application/zip" },
+            { "mimeType": "application/vnd.android.package-archive" },
+            { "mimeType": "application/octet-stream" },
+            { "mimeType": "application/msword" },
+            { "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }
+          ],
+          "category": ["DEFAULT"]
+        }
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-document-picker",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36,
+            "minSdkVersion": 24
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
