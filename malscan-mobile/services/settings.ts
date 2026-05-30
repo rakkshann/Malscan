@@ -5,9 +5,10 @@ const FILE = FileSystem.documentDirectory + 'malscan_settings.json'
 
 interface Settings {
   apiBaseUrl: string
+  isDarkMode: boolean
 }
 
-const DEFAULTS: Settings = { apiBaseUrl: API_BASE_URL }
+const DEFAULTS: Settings = { apiBaseUrl: API_BASE_URL, isDarkMode: true }
 
 export async function loadSettings(): Promise<Settings> {
   try {

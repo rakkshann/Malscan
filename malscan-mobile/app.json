@@ -7,12 +7,12 @@
     "scheme": "malscan",
     "userInterfaceStyle": "dark",
     "splash": {
-      "backgroundColor": "#0A0A0A"
+      "backgroundColor": "#121212"
     },
     "android": {
       "package": "com.malscan.mobile",
       "adaptiveIcon": {
-        "backgroundColor": "#0A0A0A"
+        "backgroundColor": "#1C201E"
       },
       "intentFilters": [
         {

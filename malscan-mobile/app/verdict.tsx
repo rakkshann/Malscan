@@ -1,13 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
-  Alert,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Text,
-  ToastAndroid,
-  TouchableOpacity,
-  View,
+  Alert, ScrollView, Share, StyleSheet, Text,
+  ToastAndroid, TouchableOpacity, View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router, useLocalSearchParams } from 'expo-router'
@@ -18,554 +12,332 @@ import { ThreatScoreGauge } from '../components/ThreatScoreGauge'
 import { VtConsensus } from '../components/VtConsensus'
 import { IocList } from '../components/IocList'
 import { GeoRisk } from '../components/GeoRisk'
-import { COLORS, FONT } from '../constants/theme'
+import { useTheme } from '../contexts/ThemeContext'
 
 type Verdict = 'Malicious' | 'Suspicious' | 'Clear'
 
-function getVerdictStyle(v: Verdict) {
+function getVerdictDisplay(v: Verdict, colors: any) {
   switch (v) {
-    case 'Malicious':
-      return {
-        color: COLORS.verdicts.malicious,
-        dim: COLORS.verdicts.maliciousDim,
-        border: COLORS.verdicts.maliciousBorder,
-        headline: 'HIGH CONFIDENCE THREAT DETECTED',
-      }
-    case 'Suspicious':
-      return {
-        color: COLORS.verdicts.suspicious,
-        dim: COLORS.verdicts.suspiciousDim,
-        border: COLORS.verdicts.suspiciousBorder,
-        headline: 'SUSPICIOUS ACTIVITY DETECTED',
-      }
-    default:
-      return {
-        color: COLORS.verdicts.clear,
-        dim: COLORS.verdicts.clearDim,
-        border: COLORS.verdicts.clearBorder,
-        headline: 'NO THREAT DETECTED',
-      }
+    case 'Malicious': return {
+      emoji: '⛔',
+      label: 'Do Not Open',
+      sublabel: 'This file is dangerous. Delete it immediately.',
+      color: colors.verdicts.malicious,
+      dim: colors.verdicts.maliciousDim,
+      border: colors.verdicts.maliciousBorder,
+    }
+    case 'Suspicious': return {
+      emoji: '⚠️',
+      label: 'Proceed with Caution',
+      sublabel: 'Something unusual was detected. Verify before opening.',
+      color: colors.verdicts.suspicious,
+      dim: colors.verdicts.suspiciousDim,
+      border: colors.verdicts.suspiciousBorder,
+    }
+    default: return {
+      emoji: '✅',
+      label: 'Safe to Open',
+      sublabel: 'No threats were found in this file.',
+      color: colors.verdicts.clear,
+      dim: colors.verdicts.clearDim,
+      border: colors.verdicts.clearBorder,
+    }
   }
 }
 
-async function copyToClipboard(value: string, label: string) {
+async function copyValue(value: string, label: string) {
   await Clipboard.setStringAsync(value)
   ToastAndroid.show(`${label} copied`, ToastAndroid.SHORT)
 }
 
-function UrlScanSection({ us }: { us: UrlScanResult }) {
-  const hasData = us.is_malicious || us.verdict_score > 0 || us.page_title || us.page_ip || us.page_country
-  if (!hasData) return null
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  const { colors, fonts } = useTheme()
   return (
-    <View style={styles.card}>
-      <View style={styles.cardHeaderRow}>
-        <Text style={styles.sectionLabel}>URLSCAN.IO SANDBOX</Text>
-        {us.is_malicious && (
-          <View style={[styles.badge, { borderColor: COLORS.verdicts.maliciousBorder, backgroundColor: COLORS.verdicts.maliciousDim }]}>
-            <Text style={[styles.badgeText, { color: COLORS.verdicts.malicious }]}>MALICIOUS</Text>
-          </View>
-        )}
-        {!us.is_malicious && us.verdict_score > 0 && (
-          <View style={[styles.badge, { borderColor: COLORS.verdicts.suspiciousBorder, backgroundColor: COLORS.verdicts.suspiciousDim }]}>
-            <Text style={[styles.badgeText, { color: COLORS.verdicts.suspicious }]}>RISK {us.verdict_score}</Text>
-          </View>
-        )}
-      </View>
-      {us.page_title ? <Text style={styles.urlScanRow}>TITLE    {us.page_title}</Text> : null}
-      {us.page_ip    ? <Text style={styles.urlScanRow}>PAGE IP  {us.page_ip}</Text> : null}
-      {us.page_country ? <Text style={styles.urlScanRow}>COUNTRY  {us.page_country}</Text> : null}
+    <View style={{ marginBottom: 10 }}>
+      <TouchableOpacity
+        style={{
+          flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+          backgroundColor: colors.surface, borderRadius: 12, padding: 16,
+          borderWidth: 1, borderColor: colors.border,
+        }}
+        onPress={() => setOpen(o => !o)}
+        activeOpacity={0.75}
+      >
+        <Text style={{ fontFamily: fonts.heading, fontSize: 14, fontWeight: '600', color: colors.text.primary }}>
+          {title}
+        </Text>
+        <Text style={{ fontFamily: fonts.body, fontSize: 18, color: colors.text.muted }}>{open ? '−' : '+'}</Text>
+      </TouchableOpacity>
+      {open && (
+        <View style={{ backgroundColor: colors.surface, borderRadius: 12, marginTop: 2, borderWidth: 1, borderColor: colors.border, padding: 16 }}>
+          {children}
+        </View>
+      )}
     </View>
   )
 }
 
 export default function VerdictScreen() {
+  const { colors, fonts } = useTheme()
   const { jobId, originalUri, mimeType } = useLocalSearchParams<{
-    jobId: string
-    originalUri?: string
-    mimeType?: string
+    jobId: string; originalUri?: string; mimeType?: string
   }>()
 
   const [results, setResults] = useState<ScanResults | null>(null)
   const [loading, setLoading] = useState(true)
 
+  const s = makeStyles(colors, fonts)
+
   useEffect(() => {
     if (!jobId) return
     getStatus(jobId)
-      .then(data => { if (data.results) setResults(data.results) })
+      .then(d => { if (d.results) setResults(d.results) })
       .catch(console.error)
       .finally(() => setLoading(false))
   }, [jobId])
 
-  const handleShare = async (verdict: Verdict, r: ScanResults) => {
+  const handleShare = async (v: Verdict, r: ScanResults) => {
     const body = [
-      '══ MALSCAN FORENSIC REPORT ══',
+      'MalScan Security Report',
+      '========================',
+      `Verdict:     ${v === 'Clear' ? 'Safe to Open' : v === 'Suspicious' ? 'Proceed with Caution' : 'Do Not Open'}`,
+      `Risk Score:  ${r.score}/100`,
+      `Family:      ${r.family}`,
       '',
-      `VERDICT     ${verdict.toUpperCase()}`,
-      `SCORE       ${r.score}/100`,
-      `FAMILY      ${r.family}`,
-      `ATTRIBUTION ${r.attribution}`,
+      r.reasons.length > 0 ? 'Findings:\n' + r.reasons.map(x => `• ${x}`).join('\n') : 'No threats detected.',
       '',
-      '── THREAT INTELLIGENCE ──',
-      ...(r.reasons.map(x => `• ${x}`)),
+      `SHA-256: ${r.file_hash || 'N/A'}`,
+      `Job ID:  ${jobId}`,
       '',
-      '── TECHNICAL METADATA ──',
-      `SHA-256  ${r.file_hash || 'N/A'}`,
-      `IMPHASH  ${r.imphash || 'N/A'}`,
-      `JOB ID   ${jobId}`,
-      '',
-      'Generated by MalScan Pro V.2.4',
+      'Generated by MalScan',
     ].join('\n')
-
-    try {
-      await Share.share({ message: body, title: `MalScan: ${verdict}` })
-    } catch {
-      // User cancelled share — no action needed
-    }
+    try { await Share.share({ message: body }) } catch {}
   }
 
-  const handleContinueToOpen = async () => {
-    if (!originalUri) {
-      Alert.alert('No file', 'Original file URI not available for pass-through.')
-      return
-    }
+  const handleOpen = async () => {
+    if (!originalUri) { Alert.alert('No file', 'Original file not available.'); return }
     try {
       await openFileNatively(originalUri, mimeType || undefined)
-      const cached = `${FileSystem.cacheDirectory}malscan_upload`
-      await FileSystem.deleteAsync(cached, { idempotent: true })
-    } catch {
-      Alert.alert('Cannot open', 'No app found to handle this file type.')
-    }
+      await FileSystem.deleteAsync(`${FileSystem.cacheDirectory}malscan_upload`, { idempotent: true })
+    } catch { Alert.alert('Cannot open', 'No app found to handle this file type.') }
   }
 
-  const handleBlockAndDelete = () => {
-    Alert.alert(
-      'Block & Delete',
-      'This will discard the file from MalScan memory. The original in the sending app is unaffected.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm Block',
-          style: 'destructive',
-          onPress: async () => {
-            if (originalUri) await FileSystem.deleteAsync(originalUri, { idempotent: true })
-            router.replace('/')
-          },
-        },
-      ],
-    )
+  const handleDelete = () => {
+    Alert.alert('Delete File', 'Remove this file from MalScan? The original in WhatsApp is unaffected.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: async () => {
+        if (originalUri) await FileSystem.deleteAsync(originalUri, { idempotent: true })
+        router.replace('/')
+      }},
+    ])
   }
-
-  // ── Loading / error states ──────────────────────────────────────────────────
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.centred}>
-          <Text style={styles.loadingText}>LOADING RESULTS...</Text>
-        </View>
+      <SafeAreaView style={s.safe}>
+        <View style={s.centred}><Text style={s.loadingText}>Loading results...</Text></View>
       </SafeAreaView>
     )
   }
 
   if (!results) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.centred}>
-          <Text style={styles.errorText}>FAILED TO LOAD RESULTS</Text>
-          <TouchableOpacity style={styles.homeBtn} onPress={() => router.replace('/')}>
-            <Text style={styles.homeBtnText}>← BACK TO HOME</Text>
+      <SafeAreaView style={s.safe}>
+        <View style={s.centred}>
+          <Text style={s.errorText}>Could not load results</Text>
+          <TouchableOpacity style={s.retryBtn} onPress={() => router.replace('/')}>
+            <Text style={s.retryBtnText}>Go Home</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
     )
   }
 
-  // ── Main render ────────────────────────────────────────────────────────────
-
   const verdict = results.verdict as Verdict
-  const vs = getVerdictStyle(verdict)
+  const vd = getVerdictDisplay(verdict, colors)
+  const isClear = verdict === 'Clear'
   const vtStats = results.osint_summary?.virustotal
   const urlScan = results.osint_summary?.urlscan
   const osint = results.osint_summary
   const apkInfo = results.apk_info
   const archiveContents = results.archive_contents || []
-  const isClear = verdict === 'Clear'
+  const hasUrlScanData = urlScan && (urlScan.is_malicious || urlScan.verdict_score > 0 || urlScan.page_title || urlScan.page_ip)
 
   return (
-    <SafeAreaView style={styles.safe}>
-      {/* ── Header bar ─────────────────────────────────────────────────────── */}
-      <View style={[styles.headerBar, { borderBottomColor: vs.border, backgroundColor: vs.dim }]}>
-        <View>
-          <Text style={styles.headerEyebrow}>ANALYSIS COMPLETE</Text>
-          <Text style={[styles.verdictLabel, { color: vs.color }]}>{verdict.toUpperCase()}</Text>
-        </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={() => handleShare(verdict, results)}
-          >
-            <Text style={styles.iconBtnText}>⬆ SHARE</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.homeBtn} onPress={() => router.replace('/')}>
-            <Text style={styles.homeBtnText}>HOME</Text>
-          </TouchableOpacity>
-        </View>
+    <SafeAreaView style={s.safe}>
+      {/* Header */}
+      <View style={s.topBar}>
+        <TouchableOpacity style={s.topBtn} onPress={() => router.replace('/')}>
+          <Text style={s.topBtnText}>← Home</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={s.topBtn} onPress={() => handleShare(verdict, results)}>
+          <Text style={s.topBtnText}>Share Report</Text>
+        </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={s.scroll}>
 
-        {/* ── Score + headline ───────────────────────────────────────────── */}
-        <View style={[styles.card, { borderColor: vs.border, backgroundColor: vs.dim }]}>
-          <ThreatScoreGauge score={results.score} color={vs.color} />
-          <Text style={[styles.headline, { color: vs.color }]}>{vs.headline}</Text>
-          <View style={styles.metaRow}>
-            <View style={styles.metaItem}>
-              <Text style={styles.metaLabel}>FAMILY</Text>
-              <Text style={styles.metaValue}>{results.family}</Text>
-            </View>
-            <View style={styles.metaItem}>
-              <Text style={styles.metaLabel}>ATTRIBUTION</Text>
-              <Text style={styles.metaValue}>{results.attribution}</Text>
-            </View>
-          </View>
+        {/* ── Verdict hero ───────────────────────────────────────────────── */}
+        <View style={[s.verdictCard, { backgroundColor: vd.dim, borderColor: vd.border }]}>
+          <Text style={s.verdictEmoji}>{vd.emoji}</Text>
+          <Text style={[s.verdictLabel, { color: vd.color }]}>{vd.label}</Text>
+          <Text style={s.verdictSublabel}>{vd.sublabel}</Text>
+          <ThreatScoreGauge score={results.score} color={vd.color} />
         </View>
 
-        {/* ── Threat intelligence reasons ────────────────────────────────── */}
-        {results.reasons.length > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.sectionLabel}>THREAT INTELLIGENCE SUMMARY</Text>
-            {results.reasons.map((r, i) => (
-              <View key={i} style={styles.reasonRow}>
-                <Text style={[styles.reasonBullet, { color: vs.color }]}>▸</Text>
-                <Text style={styles.reasonText}>{r}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* ── VirusTotal consensus ────────────────────────────────────────── */}
-        {vtStats && <VtConsensus stats={vtStats} />}
-
-        {/* ── URLScan.io sandbox ──────────────────────────────────────────── */}
-        {urlScan && <UrlScanSection us={urlScan} />}
-
-        {/* ── Infrastructure intelligence ─────────────────────────────────── */}
-        {(osint?.country || osint?.asn || osint?.registrar) && (
-          <GeoRisk osint={osint} />
-        )}
-
-        {/* ── APK Permissions ─────────────────────────────────────────────── */}
-        {apkInfo?.is_apk && (
-          <View style={styles.card}>
-            <View style={styles.cardHeaderRow}>
-              <Text style={styles.sectionLabel}>ANDROID APK ANALYSIS</Text>
-              {(apkInfo.dangerous_permissions?.length ?? 0) > 0 && (
-                <View style={[styles.badge, { borderColor: COLORS.verdicts.suspiciousBorder, backgroundColor: COLORS.verdicts.suspiciousDim }]}>
-                  <Text style={[styles.badgeText, { color: COLORS.verdicts.suspicious }]}>
-                    {apkInfo.dangerous_permissions.length} DANGEROUS
-                  </Text>
-                </View>
-              )}
-            </View>
-            {apkInfo.package    ? <Text style={styles.apkMeta}>PACKAGE: {apkInfo.package}</Text> : null}
-            {apkInfo.app_label  ? <Text style={styles.apkMeta}>APP: {apkInfo.app_label}</Text> : null}
-            {(apkInfo.dangerous_permissions?.length ?? 0) > 0 && (
-              <View style={styles.permGrid}>
-                {apkInfo.dangerous_permissions.map(p => (
-                  <View key={p} style={styles.permChip}>
-                    <Text style={styles.permText}>{p.replace('android.permission.', '')}</Text>
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* ── Archive contents ─────────────────────────────────────────────── */}
-        {archiveContents.length > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.sectionLabel}>ARCHIVE CONTENTS ({archiveContents.length} FILES)</Text>
-            {archiveContents.map((f, i) => (
-              <View key={i} style={styles.archiveRow}>
-                <Text style={styles.archiveName} numberOfLines={1}>{f.name}</Text>
-                <View style={styles.archiveTags}>
-                  {f.is_pe && <Text style={styles.archiveTagPe}>PE</Text>}
-                  {f.ioc_count > 0 && <Text style={styles.archiveTagIoc}>{f.ioc_count} IOCs</Text>}
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* ── IOC terminal ─────────────────────────────────────────────────── */}
-        <IocList indicators={results.indicators} />
-
-        {/* ── Technical footer — long-press any row to copy ────────────────── */}
-        <View style={styles.techFooter}>
-          {[
-            { label: 'SHA-256', value: results.file_hash || 'N/A' },
-            { label: 'IMPHASH', value: results.imphash || 'Not a PE file' },
-            { label: 'JOB ID',  value: jobId || 'N/A' },
-          ].map(({ label, value }) => (
-            <TouchableOpacity
-              key={label}
-              style={styles.techRow}
-              onLongPress={() => copyToClipboard(value, label)}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.techLabel}>{label}</Text>
-              <Text style={styles.techValue} numberOfLines={1}>{value}</Text>
-              <Text style={styles.techCopy}>⧉</Text>
-            </TouchableOpacity>
-          ))}
-          <Text style={styles.techHint}>Long-press any row to copy</Text>
-        </View>
-
-        {/* ── Action buttons ───────────────────────────────────────────────── */}
-        <View style={styles.actions}>
+        {/* ── Action buttons ─────────────────────────────────────────────── */}
+        <View style={s.actions}>
           {isClear && originalUri ? (
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.actionBtnClear]}
-              onPress={handleContinueToOpen}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.actionBtnText}>CONTINUE TO OPEN →</Text>
+            <TouchableOpacity style={[s.actionBtn, { backgroundColor: colors.verdicts.clear }]} onPress={handleOpen} activeOpacity={0.85}>
+              <Text style={s.actionBtnText}>Open File</Text>
             </TouchableOpacity>
           ) : null}
-
           <TouchableOpacity
-            style={[styles.actionBtn, isClear ? styles.actionBtnSecondary : styles.actionBtnBlock]}
-            onPress={isClear ? () => router.replace('/') : handleBlockAndDelete}
+            style={[s.actionBtn, isClear
+              ? { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }
+              : { backgroundColor: colors.verdicts.maliciousDim, borderWidth: 1, borderColor: colors.verdicts.maliciousBorder }
+            ]}
+            onPress={isClear ? () => router.replace('/') : handleDelete}
             activeOpacity={0.85}
           >
-            <Text style={[styles.actionBtnText, isClear && styles.actionBtnTextSecondary]}>
-              {isClear ? 'DONE' : 'BLOCK & DELETE FILE'}
+            <Text style={[s.actionBtnText, { color: isClear ? colors.text.secondary : colors.verdicts.malicious }]}>
+              {isClear ? 'Done' : 'Delete File'}
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* ── Key findings ───────────────────────────────────────────────── */}
+        {results.reasons.length > 0 && (
+          <Section title={`What we found (${results.reasons.length})`}>
+            {results.reasons.map((r, i) => (
+              <View key={i} style={s.reasonRow}>
+                <Text style={[s.reasonBullet, { color: vd.color }]}>•</Text>
+                <Text style={s.reasonText}>{r}</Text>
+              </View>
+            ))}
+          </Section>
+        )}
+
+        {/* ── VirusTotal ─────────────────────────────────────────────────── */}
+        {vtStats && (
+          <Section title="Security engine results">
+            <VtConsensus stats={vtStats} />
+          </Section>
+        )}
+
+        {/* ── URLScan ────────────────────────────────────────────────────── */}
+        {hasUrlScanData && (
+          <Section title="Sandbox analysis">
+            <View style={s.urlScanRows}>
+              {urlScan!.page_title   && <Text style={s.urlScanRow}>Page title:  {urlScan!.page_title}</Text>}
+              {urlScan!.page_ip      && <Text style={s.urlScanRow}>Server IP:   {urlScan!.page_ip}</Text>}
+              {urlScan!.page_country && <Text style={s.urlScanRow}>Country:     {urlScan!.page_country}</Text>}
+              {urlScan!.is_malicious && <Text style={[s.urlScanRow, { color: colors.verdicts.malicious, fontWeight: '600' }]}>⛔ Flagged as malicious by URLScan</Text>}
+            </View>
+          </Section>
+        )}
+
+        {/* ── Infrastructure ─────────────────────────────────────────────── */}
+        {(osint?.country || osint?.asn || osint?.registrar) && (
+          <Section title="Server & network details">
+            <GeoRisk osint={osint} />
+          </Section>
+        )}
+
+        {/* ── APK permissions ────────────────────────────────────────────── */}
+        {apkInfo?.is_apk && (
+          <Section title={`Android permissions${(apkInfo.dangerous_permissions?.length ?? 0) > 0 ? ` · ${apkInfo.dangerous_permissions.length} dangerous` : ''}`}>
+            {apkInfo.package    && <Text style={s.apkRow}>Package: {apkInfo.package}</Text>}
+            {apkInfo.app_label  && <Text style={s.apkRow}>App name: {apkInfo.app_label}</Text>}
+            {(apkInfo.dangerous_permissions || []).map(p => (
+              <View key={p} style={s.permChip}>
+                <Text style={s.permText}>{p.replace('android.permission.', '')}</Text>
+              </View>
+            ))}
+          </Section>
+        )}
+
+        {/* ── Archive contents ────────────────────────────────────────────── */}
+        {archiveContents.length > 0 && (
+          <Section title={`Archive contents (${archiveContents.length} files)`}>
+            {archiveContents.map((f, i) => (
+              <View key={i} style={s.archiveRow}>
+                <Text style={s.archiveName} numberOfLines={1}>{f.name}</Text>
+                {f.is_pe && <Text style={[s.archiveTag, { color: colors.verdicts.suspicious }]}>EXE</Text>}
+                {f.ioc_count > 0 && <Text style={[s.archiveTag, { color: colors.text.muted }]}>{f.ioc_count} links</Text>}
+              </View>
+            ))}
+          </Section>
+        )}
+
+        {/* ── IOCs ───────────────────────────────────────────────────────── */}
+        <Section title="Extracted network indicators">
+          <IocList indicators={results.indicators} />
+        </Section>
+
+        {/* ── Technical metadata ─────────────────────────────────────────── */}
+        <Section title="Technical details">
+          {[
+            { label: 'SHA-256', value: results.file_hash || 'N/A' },
+            { label: 'Imphash', value: results.imphash || 'Not a Windows executable' },
+            { label: 'Family',  value: results.family },
+            { label: 'Attributed to', value: results.attribution },
+            { label: 'Job ID',  value: jobId || 'N/A' },
+          ].map(({ label, value }) => (
+            <TouchableOpacity key={label} style={s.techRow} onLongPress={() => copyValue(value, label)} activeOpacity={0.7}>
+              <Text style={s.techLabel}>{label}</Text>
+              <Text style={s.techValue} numberOfLines={1}>{value}</Text>
+            </TouchableOpacity>
+          ))}
+          <Text style={s.techHint}>Long-press any row to copy</Text>
+        </Section>
 
       </ScrollView>
     </SafeAreaView>
   )
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: COLORS.background },
+const makeStyles = (colors: any, fonts: any) => StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.background },
   centred: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 20 },
-  loadingText: {
-    fontFamily: FONT.mono,
-    fontSize: 12,
-    color: COLORS.text.secondary,
-    letterSpacing: 3,
-  },
-  errorText: {
-    fontFamily: FONT.mono,
-    fontSize: 12,
-    color: COLORS.verdicts.malicious,
-    letterSpacing: 3,
-  },
+  loadingText: { fontFamily: fonts.body, fontSize: 15, color: colors.text.secondary },
+  errorText: { fontFamily: fonts.heading, fontSize: 16, color: colors.verdicts.malicious },
+  retryBtn: { backgroundColor: colors.surface, borderRadius: 12, paddingHorizontal: 24, paddingVertical: 12 },
+  retryBtnText: { fontFamily: fonts.body, fontSize: 14, color: colors.text.secondary },
 
-  // Header bar
-  headerBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-  },
-  headerEyebrow: {
-    fontFamily: FONT.mono,
-    fontSize: 8,
-    color: COLORS.text.muted,
-    letterSpacing: 3,
-    marginBottom: 2,
-  },
-  verdictLabel: {
-    fontFamily: FONT.mono,
-    fontSize: 20,
-    fontWeight: 'bold',
-    letterSpacing: 4,
-  },
-  headerActions: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  iconBtn: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  iconBtnText: {
-    fontFamily: FONT.mono,
-    fontSize: 9,
-    color: COLORS.text.secondary,
-    letterSpacing: 2,
-  },
-  homeBtn: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  homeBtnText: {
-    fontFamily: FONT.mono,
-    fontSize: 10,
-    color: COLORS.text.secondary,
-    letterSpacing: 2,
-  },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.border },
+  topBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  topBtnText: { fontFamily: fonts.body, fontSize: 13, color: colors.text.secondary },
 
-  scroll: { flex: 1 },
-  scrollContent: { padding: 16, gap: 12, paddingBottom: 40 },
+  scroll: { padding: 20, gap: 10, paddingBottom: 48 },
 
-  // Cards
-  card: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surface,
-    padding: 16,
-    gap: 10,
-  },
-  cardHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  sectionLabel: {
-    fontFamily: FONT.mono,
-    fontSize: 9,
-    color: COLORS.text.secondary,
-    letterSpacing: 3,
-  },
+  verdictCard: { borderRadius: 20, padding: 28, alignItems: 'center', borderWidth: 1, marginBottom: 4, gap: 8 },
+  verdictEmoji: { fontSize: 52 },
+  verdictLabel: { fontFamily: fonts.heading, fontSize: 26, fontWeight: '700', textAlign: 'center' },
+  verdictSublabel: { fontFamily: fonts.body, fontSize: 14, color: colors.text.secondary, textAlign: 'center', lineHeight: 20 },
 
-  // Score card
-  headline: {
-    fontFamily: FONT.mono,
-    fontSize: 13,
-    fontWeight: 'bold',
-    letterSpacing: 2,
-    textAlign: 'center',
-  },
-  metaRow: { flexDirection: 'row', justifyContent: 'space-around' },
-  metaItem: { alignItems: 'center' },
-  metaLabel: {
-    fontFamily: FONT.mono,
-    fontSize: 8,
-    color: COLORS.text.muted,
-    letterSpacing: 2,
-    marginBottom: 4,
-  },
-  metaValue: { fontFamily: FONT.mono, fontSize: 11, color: COLORS.text.primary, letterSpacing: 1 },
+  actions: { gap: 10, marginBottom: 4 },
+  actionBtn: { borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
+  actionBtnText: { fontFamily: fonts.heading, fontSize: 15, fontWeight: '600', color: '#fff' },
 
-  // Reasons
-  reasonRow: { flexDirection: 'row', gap: 8 },
-  reasonBullet: { fontFamily: FONT.mono, fontSize: 12, lineHeight: 18 },
-  reasonText: {
-    fontFamily: FONT.mono,
-    fontSize: 11,
-    color: COLORS.text.secondary,
-    flex: 1,
-    lineHeight: 17,
-    letterSpacing: 0.3,
-  },
+  reasonRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  reasonBullet: { fontSize: 14, lineHeight: 20 },
+  reasonText: { fontFamily: fonts.body, fontSize: 13, color: colors.text.secondary, flex: 1, lineHeight: 20 },
 
-  // URLScan
-  urlScanRow: {
-    fontFamily: FONT.mono,
-    fontSize: 10,
-    color: COLORS.text.secondary,
-    letterSpacing: 0.5,
-    lineHeight: 16,
-  },
+  urlScanRows: { gap: 6 },
+  urlScanRow: { fontFamily: fonts.body, fontSize: 13, color: colors.text.secondary, lineHeight: 20 },
 
-  // Badge (shared)
-  badge: {
-    borderWidth: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  badgeText: {
-    fontFamily: FONT.mono,
-    fontSize: 8,
-    letterSpacing: 1,
-  },
+  apkRow: { fontFamily: fonts.body, fontSize: 13, color: colors.text.secondary, marginBottom: 6 },
+  permChip: { backgroundColor: colors.verdicts.maliciousDim, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5, marginBottom: 5, alignSelf: 'flex-start' },
+  permText: { fontFamily: fonts.mono, fontSize: 11, color: colors.verdicts.malicious },
 
-  // APK
-  apkMeta: { fontFamily: FONT.mono, fontSize: 10, color: COLORS.text.secondary, letterSpacing: 0.5 },
-  permGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
-  permChip: {
-    borderWidth: 1,
-    borderColor: '#3B0000',
-    backgroundColor: '#1A0000',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  permText: { fontFamily: FONT.mono, fontSize: 9, color: '#EF4444', letterSpacing: 0.5 },
+  archiveRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.borderFaint, gap: 10 },
+  archiveName: { fontFamily: fonts.body, fontSize: 13, color: colors.text.secondary, flex: 1 },
+  archiveTag: { fontFamily: fonts.body, fontSize: 11 },
 
-  // Archive
-  archiveRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.borderFaint,
-  },
-  archiveName: { fontFamily: FONT.mono, fontSize: 10, color: COLORS.text.secondary, flex: 1 },
-  archiveTags: { flexDirection: 'row', gap: 6 },
-  archiveTagPe: {
-    fontFamily: FONT.mono,
-    fontSize: 8,
-    color: COLORS.verdicts.suspicious,
-    borderWidth: 1,
-    borderColor: COLORS.verdicts.suspiciousBorder,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-  },
-  archiveTagIoc: { fontFamily: FONT.mono, fontSize: 8, color: COLORS.accent, letterSpacing: 0.5 },
-
-  // Tech footer
-  techFooter: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surface,
-  },
-  techRow: {
-    flexDirection: 'row',
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.borderFaint,
-    gap: 10,
-    alignItems: 'center',
-  },
-  techLabel: {
-    fontFamily: FONT.mono,
-    fontSize: 9,
-    color: COLORS.text.muted,
-    letterSpacing: 2,
-    width: 72,
-  },
-  techValue: { fontFamily: FONT.mono, fontSize: 10, color: COLORS.text.secondary, flex: 1 },
-  techCopy: { fontSize: 12, color: COLORS.text.muted },
-  techHint: {
-    fontFamily: FONT.mono,
-    fontSize: 8,
-    color: COLORS.text.muted,
-    letterSpacing: 1,
-    textAlign: 'center',
-    paddingVertical: 8,
-  },
-
-  // Actions
-  actions: { gap: 10, marginTop: 4 },
-  actionBtn: { paddingVertical: 16, alignItems: 'center', borderWidth: 1 },
-  actionBtnClear: { backgroundColor: COLORS.verdicts.clear, borderColor: COLORS.verdicts.clear },
-  actionBtnBlock: { backgroundColor: COLORS.verdicts.maliciousDim, borderColor: COLORS.verdicts.maliciousBorder },
-  actionBtnSecondary: { backgroundColor: 'transparent', borderColor: COLORS.border },
-  actionBtnText: {
-    fontFamily: FONT.mono,
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    letterSpacing: 3,
-  },
-  actionBtnTextSecondary: { color: COLORS.text.secondary },
+  techRow: { flexDirection: 'row', gap: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.borderFaint },
+  techLabel: { fontFamily: fonts.body, fontSize: 12, color: colors.text.muted, width: 100 },
+  techValue: { fontFamily: fonts.mono, fontSize: 11, color: colors.text.secondary, flex: 1 },
+  techHint: { fontFamily: fonts.body, fontSize: 11, color: colors.text.muted, textAlign: 'center', marginTop: 10 },
 })

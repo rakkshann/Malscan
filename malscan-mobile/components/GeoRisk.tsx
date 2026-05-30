@@ -1,60 +1,47 @@
-import { View, Text, StyleSheet } from 'react-native'
-import { COLORS, FONT } from '../constants/theme'
+import { View, Text } from 'react-native'
+import { useTheme } from '../contexts/ThemeContext'
 
 const HIGH_RISK_CC = new Set(['RU', 'KP', 'CN', 'IR', 'BY', 'SY'])
 
 interface OsintSummary {
-  country: string | null
-  country_code: string | null
-  city: string | null
-  region: string | null
-  hosting: string | null
-  asn: string | null
-  registrar: string | null
-  domain_age_days: number | null
+  country: string | null; country_code: string | null; city: string | null
+  region: string | null; hosting: string | null; asn: string | null
+  registrar: string | null; domain_age_days: number | null
 }
 
-interface Props {
-  osint: OsintSummary
-}
-
-export function GeoRisk({ osint }: Props) {
+export function GeoRisk({ osint }: { osint: OsintSummary }) {
+  const { colors, fonts } = useTheme()
   const cc = (osint.country_code || '').toUpperCase()
   const isHighRisk = HIGH_RISK_CC.has(cc)
 
   const rows = [
-    { label: 'COUNTRY', value: osint.country || 'Unknown', warn: isHighRisk },
-    { label: 'CITY', value: [osint.city, osint.region].filter(Boolean).join(', ') || '—', warn: false },
+    { label: 'Country', value: osint.country || '—', warn: isHighRisk },
+    { label: 'City', value: [osint.city, osint.region].filter(Boolean).join(', ') || '—', warn: false },
     { label: 'ASN', value: osint.asn || '—', warn: false },
-    { label: 'ISP / HOST', value: osint.hosting || '—', warn: false },
-    { label: 'REGISTRAR', value: osint.registrar || '—', warn: false },
+    { label: 'Hosting', value: osint.hosting || '—', warn: false },
+    { label: 'Registrar', value: osint.registrar || '—', warn: false },
     {
-      label: 'DOMAIN AGE',
-      value:
-        osint.domain_age_days != null
-          ? osint.domain_age_days <= 30
-            ? `${osint.domain_age_days} days (NEW)`
-            : `${osint.domain_age_days} days`
-          : '—',
+      label: 'Domain age',
+      value: osint.domain_age_days != null
+        ? osint.domain_age_days <= 30 ? `${osint.domain_age_days} days (very new)` : `${osint.domain_age_days} days`
+        : '—',
       warn: (osint.domain_age_days ?? 9999) <= 30,
     },
   ]
 
   return (
-    <View style={styles.container}>
-      <View style={styles.headerRow}>
-        <Text style={styles.sectionLabel}>INFRASTRUCTURE INTELLIGENCE</Text>
-        {isHighRisk && (
-          <View style={styles.riskBadge}>
-            <Text style={styles.riskBadgeText}>HIGH-RISK ORIGIN</Text>
-          </View>
-        )}
-      </View>
-
+    <View style={{ gap: 8 }}>
+      {isHighRisk && (
+        <View style={{ backgroundColor: colors.verdicts.maliciousDim, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: colors.verdicts.maliciousBorder }}>
+          <Text style={{ fontFamily: fonts.body, fontSize: 13, color: colors.verdicts.malicious, fontWeight: '600' }}>
+            ⚠️ Infrastructure located in a high-risk country
+          </Text>
+        </View>
+      )}
       {rows.map(row => (
-        <View key={row.label} style={styles.row}>
-          <Text style={styles.label}>{row.label}</Text>
-          <Text style={[styles.value, row.warn && styles.valueWarn]} numberOfLines={1}>
+        <View key={row.label} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.borderFaint }}>
+          <Text style={{ fontFamily: fonts.body, fontSize: 12, color: colors.text.muted, width: 90 }}>{row.label}</Text>
+          <Text style={{ fontFamily: fonts.body, fontSize: 13, color: row.warn ? colors.verdicts.suspicious : colors.text.primary, flex: 1, textAlign: 'right' }} numberOfLines={1}>
             {row.value}
           </Text>
         </View>
@@ -62,61 +49,3 @@ export function GeoRisk({ osint }: Props) {
     </View>
   )
 }
-
-const styles = StyleSheet.create({
-  container: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surface,
-    padding: 16,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  sectionLabel: {
-    fontFamily: FONT.mono,
-    fontSize: 9,
-    color: COLORS.text.secondary,
-    letterSpacing: 3,
-  },
-  riskBadge: {
-    backgroundColor: COLORS.verdicts.maliciousDim,
-    borderWidth: 1,
-    borderColor: COLORS.verdicts.maliciousBorder,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  riskBadgeText: {
-    fontFamily: FONT.mono,
-    fontSize: 8,
-    color: COLORS.verdicts.malicious,
-    letterSpacing: 1,
-  },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.borderFaint,
-  },
-  label: {
-    fontFamily: FONT.mono,
-    fontSize: 9,
-    color: COLORS.text.muted,
-    letterSpacing: 2,
-    width: 100,
-  },
-  value: {
-    fontFamily: FONT.mono,
-    fontSize: 11,
-    color: COLORS.text.primary,
-    flex: 1,
-    textAlign: 'right',
-  },
-  valueWarn: {
-    color: COLORS.verdicts.suspicious,
-  },
-})

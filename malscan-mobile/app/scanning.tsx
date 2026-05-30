@@ -1,384 +1,257 @@
 import { useEffect, useRef, useState } from 'react'
-import {
-  Animated,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native'
+import { Animated, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router, useLocalSearchParams } from 'expo-router'
 import { uploadFile, submitUrl } from '../services/api'
 import { useScanPoller } from '../hooks/useScanPoller'
 import { addToHistory } from '../services/history'
-import { COLORS, FONT } from '../constants/theme'
+import { useTheme } from '../contexts/ThemeContext'
 
-const PHASES = [
-  'INITIALIZING AIRLOCK...',
-  'COMPUTING SHA-256 HASH...',
-  'EXTRACTING STRINGS & IOCs...',
-  'ANALYZING PE HEADERS...',
-  'CHECKING KNOWN-HASH BLOCKLIST...',
-  'QUERYING VIRUSTOTAL API...',
-  'RUNNING URLSCAN SANDBOX...',
-  'PERFORMING WHOIS LOOKUP...',
-  'RESOLVING DNS RECORDS...',
-  'GEOLOCATING INFRASTRUCTURE...',
-  'RUNNING ATTRIBUTION ENGINE...',
-  'CALCULATING THREAT SCORE...',
-  'CLUSTERING INFRASTRUCTURE...',
-  'GENERATING FORENSIC REPORT...',
-] as const
+const PHASES: { label: string; detail: string }[] = [
+  { label: 'Preparing',               detail: 'Setting up a secure environment' },
+  { label: 'Fingerprinting',          detail: 'Creating a unique hash of the file' },
+  { label: 'Content scan',            detail: 'Looking for suspicious links and patterns' },
+  { label: 'Structure analysis',      detail: 'Examining the file\'s internal structure' },
+  { label: 'Threat database',         detail: 'Checking against known malware signatures' },
+  { label: 'Security engines',        detail: 'Verifying with 70+ security vendors' },
+  { label: 'Sandbox test',            detail: 'Testing in an isolated environment' },
+  { label: 'Domain check',            detail: 'Investigating domain ownership' },
+  { label: 'Network records',         detail: 'Checking DNS and network infrastructure' },
+  { label: 'Location mapping',        detail: 'Locating associated servers' },
+  { label: 'Threat attribution',      detail: 'Identifying known threat actors' },
+  { label: 'Risk calculation',        detail: 'Calculating your safety score' },
+  { label: 'Cross-referencing',       detail: 'Comparing with previous scans' },
+  { label: 'Report generation',       detail: 'Preparing your detailed report' },
+]
 
 export default function ScanningScreen() {
+  const { colors, fonts } = useTheme()
   const { uri, url, filename, source, mimeType } = useLocalSearchParams<{
-    uri?: string
-    url?: string
-    filename?: string
-    source?: string
-    mimeType?: string
+    uri?: string; url?: string; filename?: string; source?: string; mimeType?: string
   }>()
 
-  const [jobId, setJobId] = useState<string | null>(null)
-  const [phase, setPhase] = useState(0)
+  const [jobId, setJobId]   = useState<string | null>(null)
+  const [phase, setPhase]   = useState(0)
   const [elapsed, setElapsed] = useState(0)
-  const [error, setError] = useState<string | null>(null)
-  const [done, setDone] = useState(false)
+  const [error, setError]   = useState<string | null>(null)
+  const [done, setDone]     = useState(false)
 
-  const phaseTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const phaseTimer   = useRef<ReturnType<typeof setInterval> | null>(null)
   const elapsedTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Scan line sweep — pointerEvents must be in style, NOT a prop (RN 0.74+ deprecation)
-  const scanY = useRef(new Animated.Value(-2)).current
-  useEffect(() => {
-    Animated.loop(
-      Animated.timing(scanY, { toValue: 1000, duration: 2400, useNativeDriver: true }),
-    ).start()
-  }, [])
+  const s = makeStyles(colors, fonts)
 
-  // Shield pulse
-  const shield = useRef(new Animated.Value(1)).current
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(shield, { toValue: 1.12, duration: 700, useNativeDriver: true }),
-        Animated.timing(shield, { toValue: 1, duration: 700, useNativeDriver: true }),
-      ]),
-    ).start()
-  }, [])
+  // Animated progress bar
+  const progressAnim = useRef(new Animated.Value(0)).current
+  const progress = Math.min(((phase + 1) / PHASES.length) * 100, done ? 100 : 95)
 
-  // Phase cycling + elapsed timer
   useEffect(() => {
-    phaseTimer.current = setInterval(
-      () => setPhase(p => Math.min(p + 1, PHASES.length - 1)),
-      2200,
-    )
+    Animated.timing(progressAnim, { toValue: progress, duration: 400, useNativeDriver: false }).start()
+  }, [progress])
+
+  // Phase cycling
+  useEffect(() => {
+    phaseTimer.current   = setInterval(() => setPhase(p => Math.min(p + 1, PHASES.length - 1)), 2200)
     elapsedTimer.current = setInterval(() => setElapsed(e => e + 1), 1000)
     return () => {
-      if (phaseTimer.current) clearInterval(phaseTimer.current)
+      if (phaseTimer.current)   clearInterval(phaseTimer.current)
       if (elapsedTimer.current) clearInterval(elapsedTimer.current)
     }
   }, [])
 
-  // Upload on mount
+  // Upload
   useEffect(() => {
     const start = async () => {
       try {
         let id: string
-        if (uri) {
-          id = await uploadFile(uri, filename || 'scan_target')
-        } else if (url) {
-          id = await submitUrl(url)
-        } else {
-          setError('No file or URL was provided to scan.')
-          return
-        }
+        if (uri)       id = await uploadFile(uri, filename || 'scan_target')
+        else if (url)  id = await submitUrl(url)
+        else { setError('No file or URL provided.'); return }
         setJobId(id)
       } catch (e: any) {
         const msg = e?.response?.data?.detail || e?.message || 'Upload failed.'
-        setError(`${msg}\n\nIs the backend running? Check Settings → CONFIG.`)
+        setError(`${msg}\n\nIs the backend running? Check Settings.`)
       }
     }
     start()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Poll for result
+  // Poll
   const scanResult = useScanPoller(jobId)
   useEffect(() => {
     if (!scanResult) return
-
     if (scanResult.status === 'Completed' && !done) {
       setDone(true)
-      if (phaseTimer.current) clearInterval(phaseTimer.current)
+      if (phaseTimer.current)   clearInterval(phaseTimer.current)
       if (elapsedTimer.current) clearInterval(elapsedTimer.current)
-
-      // Persist to local scan history
       const r = scanResult.results
       if (r) {
-        addToHistory({
-          jobId: scanResult.job_id,
-          target: filename || url || uri || 'Unknown',
-          verdict: r.verdict,
-          score: r.score,
-          family: r.family || 'Unknown',
-          scannedAt: new Date().toISOString(),
-        })
+        addToHistory({ jobId: scanResult.job_id, target: filename || url || uri || 'Unknown',
+          verdict: r.verdict, score: r.score, family: r.family || 'Unknown', scannedAt: new Date().toISOString() })
       }
-
-      setTimeout(() => {
-        router.replace({
-          pathname: '/verdict',
-          params: { jobId: scanResult.job_id, originalUri: uri || '', mimeType: mimeType || '' },
-        })
-      }, 700)
+      setTimeout(() => router.replace({
+        pathname: '/verdict',
+        params: { jobId: scanResult.job_id, originalUri: uri || '', mimeType: mimeType || '' },
+      }), 600)
     }
-
-    if (scanResult.status === 'Failed') {
-      setError('The backend analysis pipeline encountered an error. Check server logs.')
-    }
+    if (scanResult.status === 'Failed') setError('The scan engine encountered an error. Please try again.')
   }, [scanResult]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const progress = Math.min(((phase + 1) / PHASES.length) * 100, done ? 100 : 95)
+  const currentPhase = PHASES[Math.min(phase, PHASES.length - 1)]
 
   return (
-    <SafeAreaView style={styles.safe}>
-      {/* Scan line — pointerEvents in style to avoid RN 0.74 deprecation warning */}
-      <Animated.View
-        style={[
-          styles.scanLine,
-          { transform: [{ translateY: scanY }], pointerEvents: 'none' },
-        ]}
-      />
+    <SafeAreaView style={s.safe}>
+      <View style={s.container}>
 
-      <View style={styles.container}>
-        {/* ── Top bar ────────────────────────────────────────────────────── */}
-        <View style={styles.topBar}>
-          <Text style={styles.topLabel}>AIRLOCK ENGAGED</Text>
-          <View style={[styles.pill, error ? styles.pillError : styles.pillActive]}>
-            <Text style={styles.pillText}>
-              {error ? 'ERROR' : done ? 'COMPLETE' : 'SCANNING'}
-            </Text>
+        {/* Header */}
+        <View style={s.header}>
+          <Text style={s.headerTitle}>Scanning</Text>
+          <View style={[s.statusPill, error ? s.pillError : done ? s.pillDone : s.pillActive]}>
+            <Text style={s.pillText}>{error ? 'Error' : done ? 'Done' : 'In progress'}</Text>
           </View>
         </View>
 
-        {/* ── Shield ──────────────────────────────────────────────────────── */}
-        <View style={styles.center}>
-          <Animated.Text style={[styles.shieldGlyph, { transform: [{ scale: shield }] }]}>
-            ⬡
-          </Animated.Text>
-          <Text style={styles.title}>ANALYZING</Text>
-          <Text style={styles.sub}>
-            {source === 'intent'  ? 'File intercepted from external app'
-            : source === 'share' ? 'URL received via share target'
-            : source === 'picker'? 'File selected from device storage'
-            :                      'Manual scan initiated'}
+        {/* Shield */}
+        <View style={s.shieldWrap}>
+          <View style={s.shieldCircle}>
+            <Text style={s.shieldGlyph}>🛡</Text>
+          </View>
+          <Text style={s.analysingText}>Analysing your file</Text>
+          <Text style={s.sourceText}>
+            {source === 'intent' || source === 'share'
+              ? 'Received from another app'
+              : 'Selected from device'}
           </Text>
         </View>
 
-        {/* ── Current phase ───────────────────────────────────────────────── */}
-        <View style={styles.phaseBox}>
-          <Text style={styles.phaseLabel}>CURRENT OPERATION</Text>
-          <Text style={styles.phaseText} numberOfLines={1}>
-            {error ? '⚠  ERROR DETECTED' : PHASES[phase]}
-          </Text>
+        {/* Progress bar */}
+        <View style={s.progressTrack}>
+          <Animated.View
+            style={[s.progressFill, {
+              width: progressAnim.interpolate({ inputRange: [0, 100], outputRange: ['0%', '100%'] }),
+              backgroundColor: error ? colors.verdicts.malicious : colors.accent,
+            }]}
+          />
+        </View>
+        <View style={s.progressMeta}>
+          <Text style={s.progressPct}>{Math.round(progress)}%</Text>
+          <Text style={s.progressTime}>{elapsed}s elapsed</Text>
         </View>
 
-        {/* ── Progress bar ────────────────────────────────────────────────── */}
-        <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: `${Math.round(progress)}%` as `${number}%` }]} />
-        </View>
-        <View style={styles.progressMeta}>
-          <Text style={styles.metaText}>{Math.round(progress)}% COMPLETE</Text>
-          <Text style={styles.metaText}>{elapsed}s ELAPSED</Text>
+        {/* Current phase */}
+        {!error ? (
+          <View style={s.phaseCard}>
+            <Text style={s.phaseLabel}>{currentPhase.label}</Text>
+            <Text style={s.phaseDetail}>{currentPhase.detail}</Text>
+          </View>
+        ) : (
+          <View style={s.errorCard}>
+            <Text style={s.errorTitle}>Something went wrong</Text>
+            <Text style={s.errorBody}>{error}</Text>
+          </View>
+        )}
+
+        {/* Job info */}
+        {jobId && !error && (
+          <View style={s.infoCard}>
+            <View style={s.infoRow}>
+              <Text style={s.infoKey}>File</Text>
+              <Text style={s.infoVal} numberOfLines={1}>{filename || url || 'Unknown'}</Text>
+            </View>
+            <View style={s.infoRow}>
+              <Text style={s.infoKey}>Status</Text>
+              <Text style={s.infoVal}>{scanResult?.status ?? 'Submitted'}</Text>
+            </View>
+          </View>
+        )}
+
+        {/* Phase steps — simple dots */}
+        <View style={s.dots}>
+          {PHASES.map((_, i) => (
+            <View
+              key={i}
+              style={[s.dot, i <= phase && !error && s.dotActive, done && s.dotDone]}
+            />
+          ))}
         </View>
 
-        {/* ── Job metadata ─────────────────────────────────────────────────── */}
-        <View style={styles.metaBox}>
-          {error ? (
-            <Text style={styles.errorText}>{error}</Text>
-          ) : jobId ? (
-            <>
-              <Text style={styles.metaRow}>
-                <Text style={styles.metaKey}>JOB_ID  </Text>
-                {jobId.slice(0, 8).toUpperCase()}...
-              </Text>
-              <Text style={styles.metaRow}>
-                <Text style={styles.metaKey}>STATUS  </Text>
-                {scanResult?.status ?? 'Submitted'}
-              </Text>
-              <Text style={styles.metaRow}>
-                <Text style={styles.metaKey}>TARGET  </Text>
-                {(filename || url || uri || '').slice(0, 40)}
-              </Text>
-            </>
-          ) : (
-            <Text style={styles.metaRow}>UPLOADING ARTIFACT TO BACKEND...</Text>
-          )}
-        </View>
-
-        {/* ── Live log stream ──────────────────────────────────────────────── */}
-        <View style={styles.logBox}>
-          {[...PHASES]
-            .slice(0, phase + 1)
-            .reverse()
-            .slice(0, 4)
-            .map((p, i) => (
-              <Text key={p} style={[styles.logLine, i === 0 && !error && styles.logLineActive]}>
-                {'>'} {p}
-              </Text>
-            ))}
-        </View>
       </View>
 
-      {/* ── Warning bar ──────────────────────────────────────────────────────── */}
-      <View style={styles.warningBar}>
-        <Text style={styles.warningText}>DO NOT CLOSE · ANALYSIS IN PROGRESS</Text>
+      {/* Bottom bar */}
+      <View style={[s.bottomBar, error && s.bottomBarError]}>
+        {error ? (
+          <TouchableOpacity onPress={() => router.back()}>
+            <Text style={s.bottomBarText}>← Go back and try again</Text>
+          </TouchableOpacity>
+        ) : (
+          <Text style={s.bottomBarText}>Please keep the app open during scanning</Text>
+        )}
       </View>
-
-      {/* Error back button */}
-      {error && (
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Text style={styles.backBtnText}>← GO BACK</Text>
-        </TouchableOpacity>
-      )}
     </SafeAreaView>
   )
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: COLORS.background },
-  scanLine: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: 1,
-    backgroundColor: COLORS.accent,
-    opacity: 0.12,
-    zIndex: 0,
-  },
-  container: {
-    flex: 1,
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    paddingBottom: 12,
-    zIndex: 1,
-  },
+const makeStyles = (colors: any, fonts: any) => StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { flex: 1, paddingHorizontal: 24, paddingTop: 20, paddingBottom: 12 },
 
-  topBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  topLabel: {
-    fontFamily: FONT.mono,
-    fontSize: 9,
-    color: COLORS.accent,
-    letterSpacing: 4,
-  },
-  pill: { paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1 },
-  pillActive: {
-    borderColor: COLORS.verdicts.suspiciousBorder,
-    backgroundColor: COLORS.verdicts.suspiciousDim,
-  },
-  pillError: {
-    borderColor: COLORS.verdicts.maliciousBorder,
-    backgroundColor: COLORS.verdicts.maliciousDim,
-  },
-  pillText: {
-    fontFamily: FONT.mono,
-    fontSize: 8,
-    color: COLORS.text.primary,
-    letterSpacing: 2,
-  },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 32 },
+  headerTitle: { fontFamily: fonts.heading, fontSize: 20, fontWeight: '700', color: colors.text.primary },
+  statusPill: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20 },
+  pillActive: { backgroundColor: colors.verdicts.suspiciousDim },
+  pillDone:   { backgroundColor: colors.verdicts.clearDim },
+  pillError:  { backgroundColor: colors.verdicts.maliciousDim },
+  pillText: { fontFamily: fonts.body, fontSize: 12, color: colors.text.secondary },
 
-  center: { alignItems: 'center', marginBottom: 28 },
-  shieldGlyph: { fontSize: 44, color: COLORS.accent, lineHeight: 50, marginBottom: 8 },
-  title: {
-    fontFamily: FONT.mono,
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: COLORS.text.primary,
-    letterSpacing: 8,
-    marginBottom: 4,
+  shieldWrap: { alignItems: 'center', marginBottom: 36 },
+  shieldCircle: {
+    width: 96, height: 96, borderRadius: 48,
+    backgroundColor: colors.surface,
+    borderWidth: 2, borderColor: colors.accent,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 16, elevation: 4,
   },
-  sub: { fontFamily: FONT.mono, fontSize: 9, color: COLORS.text.muted, letterSpacing: 1 },
+  shieldGlyph: { fontSize: 48 },
+  analysingText: { fontFamily: fonts.heading, fontSize: 22, fontWeight: '700', color: colors.text.primary, marginBottom: 4 },
+  sourceText: { fontFamily: fonts.body, fontSize: 13, color: colors.text.muted },
 
-  phaseBox: {
-    borderWidth: 1,
-    borderColor: COLORS.accentBorder,
-    backgroundColor: COLORS.accentDim,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 16,
-  },
-  phaseLabel: {
-    fontFamily: FONT.mono,
-    fontSize: 8,
-    color: COLORS.accent,
-    letterSpacing: 3,
-    marginBottom: 5,
-  },
-  phaseText: {
-    fontFamily: FONT.mono,
-    fontSize: 12,
-    color: COLORS.text.primary,
-    letterSpacing: 0.5,
-  },
+  progressTrack: { height: 6, backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden', marginBottom: 8 },
+  progressFill: { height: '100%', borderRadius: 3 },
+  progressMeta: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24 },
+  progressPct: { fontFamily: fonts.body, fontSize: 13, color: colors.text.secondary },
+  progressTime: { fontFamily: fonts.body, fontSize: 13, color: colors.text.muted },
 
-  progressTrack: {
-    height: 2,
-    backgroundColor: COLORS.border,
-    marginBottom: 6,
-    overflow: 'hidden',
+  phaseCard: {
+    backgroundColor: colors.surface, borderRadius: 14, padding: 18,
+    borderWidth: 1, borderColor: colors.border, marginBottom: 14, elevation: 1,
   },
-  progressFill: { height: '100%', backgroundColor: COLORS.accent },
-  progressMeta: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 20,
-  },
-  metaText: { fontFamily: FONT.mono, fontSize: 9, color: COLORS.text.muted, letterSpacing: 1 },
+  phaseLabel: { fontFamily: fonts.heading, fontSize: 16, fontWeight: '600', color: colors.text.primary, marginBottom: 4 },
+  phaseDetail: { fontFamily: fonts.body, fontSize: 13, color: colors.text.muted },
 
-  metaBox: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surface,
-    padding: 14,
-    marginBottom: 16,
-    gap: 6,
+  errorCard: {
+    backgroundColor: colors.verdicts.maliciousDim, borderRadius: 14, padding: 18,
+    borderWidth: 1, borderColor: colors.verdicts.maliciousBorder, marginBottom: 14,
   },
-  metaRow: { fontFamily: FONT.mono, fontSize: 10, color: COLORS.text.secondary, letterSpacing: 0.5 },
-  metaKey: { color: COLORS.text.muted, letterSpacing: 1 },
-  errorText: {
-    fontFamily: FONT.mono,
-    fontSize: 10,
-    color: COLORS.verdicts.malicious,
-    lineHeight: 16,
-  },
+  errorTitle: { fontFamily: fonts.heading, fontSize: 15, fontWeight: '600', color: colors.verdicts.malicious, marginBottom: 6 },
+  errorBody: { fontFamily: fonts.body, fontSize: 13, color: colors.text.secondary, lineHeight: 20 },
 
-  logBox: { gap: 5 },
-  logLine: { fontFamily: FONT.mono, fontSize: 10, color: COLORS.text.muted, letterSpacing: 0.3 },
-  logLineActive: { color: COLORS.accent },
-
-  warningBar: {
-    borderTopWidth: 1,
-    borderColor: COLORS.accentBorder,
-    backgroundColor: COLORS.accentDim,
-    paddingVertical: 10,
-    alignItems: 'center',
+  infoCard: {
+    backgroundColor: colors.surface, borderRadius: 14, padding: 16,
+    borderWidth: 1, borderColor: colors.border, marginBottom: 20, gap: 8,
   },
-  warningText: { fontFamily: FONT.mono, fontSize: 9, color: COLORS.accent, letterSpacing: 3 },
+  infoRow: { flexDirection: 'row', gap: 10 },
+  infoKey: { fontFamily: fonts.body, fontSize: 12, color: colors.text.muted, width: 48 },
+  infoVal: { fontFamily: fonts.body, fontSize: 12, color: colors.text.secondary, flex: 1 },
 
-  backBtn: {
-    position: 'absolute',
-    bottom: 56,
-    alignSelf: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 24,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surface,
+  dots: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'center' },
+  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.border },
+  dotActive: { backgroundColor: colors.accent },
+  dotDone:   { backgroundColor: colors.verdicts.clear },
+
+  bottomBar: {
+    paddingVertical: 14, paddingHorizontal: 24, alignItems: 'center',
+    backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.border,
   },
-  backBtnText: { fontFamily: FONT.mono, fontSize: 11, color: COLORS.text.secondary, letterSpacing: 2 },
+  bottomBarError: { backgroundColor: colors.verdicts.maliciousDim, borderTopColor: colors.verdicts.maliciousBorder },
+  bottomBarText: { fontFamily: fonts.body, fontSize: 13, color: colors.text.muted, textAlign: 'center' },
 })

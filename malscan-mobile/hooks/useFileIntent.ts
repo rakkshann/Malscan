@@ -27,11 +27,11 @@ export function useFileIntent(): FileIntent {
             if (uri) setIntent({ uri, text: null, mimeType })
             else if (text) setIntent({ uri: null, text, mimeType: null })
           },
-          (error: unknown) => console.warn('[MalScan] ReceiveSharingIntent error:', error),
+          (_error: unknown) => { /* non-fatal native module init noise — intentionally suppressed */ },
           'malscan',
         )
-      } catch (e) {
-        console.warn('[MalScan] ReceiveSharingIntent not available:', e)
+      } catch {
+        // Native module unavailable — intent sharing gracefully disabled
       }
     }
 

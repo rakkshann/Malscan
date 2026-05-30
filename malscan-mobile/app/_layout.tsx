@@ -2,26 +2,34 @@ import { useEffect } from 'react'
 import { Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
-import { COLORS } from '../constants/theme'
+import { ThemeProvider, useTheme } from '../contexts/ThemeContext'
 import { loadSettings } from '../services/settings'
 import { updateApiBaseUrl } from '../services/api'
 
+function AppNavigator() {
+  const { colors, isDark } = useTheme()
+  return (
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
+      <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={colors.background} />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: colors.background },
+          animation: 'fade',
+        }}
+      />
+    </GestureHandlerRootView>
+  )
+}
+
 export default function RootLayout() {
-  // Load persisted backend URL before first render of any screen
   useEffect(() => {
     loadSettings().then(s => updateApiBaseUrl(s.apiBaseUrl))
   }, [])
 
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: COLORS.background }}>
-      <StatusBar style="light" backgroundColor={COLORS.background} />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: COLORS.background },
-          animation: 'fade',
-        }}
-      />
-    </GestureHandlerRootView>
+    <ThemeProvider>
+      <AppNavigator />
+    </ThemeProvider>
   )
 }
