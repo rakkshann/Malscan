@@ -33,6 +33,15 @@ export async function addToHistory(entry: ScanSummary): Promise<void> {
   }
 }
 
+export async function removeFromHistory(jobId: string): Promise<void> {
+  try {
+    const current = await getHistory()
+    await FileSystem.writeAsStringAsync(FILE, JSON.stringify(current.filter(e => e.jobId !== jobId)))
+  } catch (e) {
+    console.warn('[MalScan] Failed to remove history entry:', e)
+  }
+}
+
 export async function clearHistory(): Promise<void> {
   try {
     await FileSystem.deleteAsync(FILE, { idempotent: true })

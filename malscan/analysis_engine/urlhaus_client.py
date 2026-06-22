@@ -2,15 +2,21 @@
 analysis_engine/urlhaus_client.py
 
 URLhaus (abuse.ch) — malicious URL lookup.
-No API key required. Free, public.
+Uses the free abuse.ch Auth-Key (ABUSECH_AUTH_KEY in backend/.env) when set.
 Specialises in malware distribution URLs.
 https://urlhaus.abuse.ch/api/
 """
 
+import os
 import requests
 
 _API = "https://urlhaus-api.abuse.ch/v1/"
 _TIMEOUT = 10
+
+
+def _auth_headers() -> dict:
+    key = os.environ.get("ABUSECH_AUTH_KEY", "").strip()
+    return {"Auth-Key": key} if key else {}
 
 
 def check_url(url: str) -> dict:
@@ -24,12 +30,15 @@ def check_url(url: str) -> dict:
         resp = requests.post(
             _API + "url/",
             data={"url": url},
+            headers=_auth_headers(),
             timeout=_TIMEOUT,
         )
         resp.raise_for_status()
         data = resp.json()
 
-        if data.get("query_status") == "no_results":
+        # Only a positive "ok" is a hit — any other status (no_results,
+        # invalid_url, errors) must NOT be treated as a detection.
+        if data.get("query_status") != "ok":
             return {"found": False}
 
         return {

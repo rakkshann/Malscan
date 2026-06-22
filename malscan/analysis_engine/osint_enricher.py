@@ -22,10 +22,10 @@ def get_dns_records(domain: str) -> dict:
     Resolves basic DNS records (A, MX, TXT) for a domain.
     """
     records = {"A": [], "MX": [], "TXT": []}
-    
+
     for record_type in records.keys():
         try:
-            answers = dns.resolver.resolve(domain, record_type)
+            answers = dns.resolver.resolve(domain, record_type, lifetime=10)
             records[record_type] = [rdata.to_text() for rdata in answers]
         except Exception:
             # Common to not find certain records
@@ -39,7 +39,10 @@ def get_geoip(ip_address: str) -> dict:
     Note: For production, a reliable/paid API or local MaxMind database is recommended.
     """
     try:
-        response = requests.get(f"http://ip-api.com/json/{ip_address}?fields=status,message,country,countryCode,isp,org,as,lat,lon,city,regionName")
+        response = requests.get(
+            f"http://ip-api.com/json/{ip_address}?fields=status,message,country,countryCode,isp,org,as,lat,lon,city,regionName",
+            timeout=10,
+        )
         if response.status_code == 200:
             data = response.json()
             if data.get("status") == "success":

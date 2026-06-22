@@ -7,13 +7,13 @@ export const FONTS = {
 } as const
 
 // ── Palette ───────────────────────────────────────────────────────────────────
-// Derived from: Glacial Tint #EBF1ED · Tropical Cyclone #B9CABE
-//               Wethersfield Moss #81938A · Siberian Green #50605A
-//               Carbon Fiber #2D2E2B · Dark Tone Ink #121212
+// "Polished Trust": cool neutral surfaces + an indigo-iris brand accent. The
+// accent never collides with the verdict semaphore (safe=green, suspicious=amber,
+// malicious=red), which is kept by convention.
 
-const SAFE_GREEN  = '#4E9A6A'
-const WARN_AMBER  = '#C49A3C'
-const DANGER_RED  = '#C94040'
+const SAFE_GREEN  = '#42BE84'   // verdict: clear / safe
+const WARN_AMBER  = '#E0A23A'   // verdict: suspicious
+const DANGER_RED  = '#E5575C'   // verdict: malicious
 
 export interface AppColors {
   background: string
@@ -34,20 +34,20 @@ export interface AppColors {
 }
 
 export const darkColors: AppColors = {
-  background:    '#121212',
-  surface:       '#1C201E',
-  surfaceRaised: '#272B29',
-  border:        '#353A37',
-  borderFaint:   '#242826',
+  background:    '#0F1116',
+  surface:       '#181B22',
+  surfaceRaised: '#222631',
+  border:        '#2B303B',
+  borderFaint:   '#1F232B',
 
-  accent:       '#6B8C7A',
-  accentDim:    '#6B8C7A18',
-  accentBorder: '#6B8C7A40',
+  accent:       '#6366F1',
+  accentDim:    '#6366F11F',
+  accentBorder: '#6366F145',
 
   text: {
-    primary:   '#EBF1ED',
-    secondary: '#B9CABE',
-    muted:     '#81938A',
+    primary:   '#ECEEF4',
+    secondary: '#AAB0BE',
+    muted:     '#6B7180',
   },
 
   verdicts: {
@@ -66,44 +66,44 @@ export const darkColors: AppColors = {
     malicious:  DANGER_RED,
     suspicious: WARN_AMBER,
     harmless:   SAFE_GREEN,
-    undetected: '#50605A',
+    undetected: '#5A6172',
   },
 }
 
 export const lightColors: AppColors = {
-  background:    '#EBF1ED',
+  background:    '#F5F6FA',
   surface:       '#FFFFFF',
-  surfaceRaised: '#D4DDD7',
-  border:        '#B9CABE',
-  borderFaint:   '#D4DDD7',
+  surfaceRaised: '#EAECF3',
+  border:        '#D9DCE6',
+  borderFaint:   '#EAECF3',
 
-  accent:       '#50605A',
-  accentDim:    '#50605A15',
-  accentBorder: '#50605A35',
+  accent:       '#5257E0',
+  accentDim:    '#5257E014',
+  accentBorder: '#5257E033',
 
   text: {
-    primary:   '#121212',
-    secondary: '#2D3330',
-    muted:     '#50605A',
+    primary:   '#15171E',
+    secondary: '#3B404C',
+    muted:     '#6B7180',
   },
 
   verdicts: {
-    malicious:       '#B83232',
-    maliciousDim:    '#B8323215',
-    maliciousBorder: '#B8323240',
+    malicious:       '#C5343A',
+    maliciousDim:    '#C5343A15',
+    maliciousBorder: '#C5343A40',
     suspicious:       '#9A7520',
     suspiciousDim:    '#9A752015',
     suspiciousBorder: '#9A752040',
-    clear:       '#3A7D52',
-    clearDim:    '#3A7D5215',
-    clearBorder: '#3A7D5240',
+    clear:       '#2E8B57',
+    clearDim:    '#2E8B5715',
+    clearBorder: '#2E8B5740',
   },
 
   vt: {
-    malicious:  '#B83232',
+    malicious:  '#C5343A',
     suspicious: '#9A7520',
-    harmless:   '#3A7D52',
-    undetected: '#81938A',
+    harmless:   '#2E8B57',
+    undetected: '#8A90A0',
   },
 }
 

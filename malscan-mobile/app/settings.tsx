@@ -122,10 +122,10 @@ export default function SettingsScreen() {
             <Text style={s.sectionLabel}>About</Text>
             <View style={s.card}>
               {[
-                { k: 'App',      v: 'MalScan' },
-                { k: 'Version',  v: '1.0.0' },
-                { k: 'Engine',   v: 'MalScan Pro V.2.4' },
-                { k: 'Platform', v: 'Android' },
+                { k: 'App',          v: 'MalScan' },
+                { k: 'Version',      v: '1.1.0' },
+                { k: 'Threat intel', v: 'VirusTotal · URLScan · abuse.ch' },
+                { k: 'Platform',     v: 'Android' },
               ].map(({ k, v }) => (
                 <View key={k} style={s.aboutRow}>
                   <Text style={s.aboutKey}>{k}</Text>

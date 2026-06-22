@@ -2,24 +2,43 @@ import { useEffect, useRef, useState } from 'react'
 import { Animated, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router, useLocalSearchParams } from 'expo-router'
-import { uploadFile, submitUrl } from '../services/api'
+import { uploadFile, submitUrl, describeApiError } from '../services/api'
 import { useScanPoller } from '../hooks/useScanPoller'
 import { addToHistory } from '../services/history'
 import { useTheme } from '../contexts/ThemeContext'
+import { ShieldIcon } from '../components/ShieldIcon'
 
-const PHASES: { label: string; detail: string }[] = [
-  { label: 'Preparing',               detail: 'Setting up a secure environment' },
-  { label: 'Fingerprinting',          detail: 'Creating a unique hash of the file' },
-  { label: 'Content scan',            detail: 'Looking for suspicious links and patterns' },
-  { label: 'Structure analysis',      detail: 'Examining the file\'s internal structure' },
-  { label: 'Threat database',         detail: 'Checking against known malware signatures' },
-  { label: 'Security engines',        detail: 'Verifying with 70+ security vendors' },
-  { label: 'Sandbox test',            detail: 'Testing in an isolated environment' },
-  { label: 'Domain check',            detail: 'Investigating domain ownership' },
-  { label: 'Network records',         detail: 'Checking DNS and network infrastructure' },
-  { label: 'Location mapping',        detail: 'Locating associated servers' },
-  { label: 'Threat attribution',      detail: 'Identifying known threat actors' },
-  { label: 'Risk calculation',        detail: 'Calculating your safety score' },
+// A scan that has produced nothing after this long is stuck — surface an error
+// instead of spinning forever (e.g. backend died mid-job).
+const SCAN_TIMEOUT_MS = 4 * 60 * 1000
+
+// Phase labels mirror the real backend pipeline stages (static analysis →
+// threat-intel lookups → OSINT enrichment → scoring → clustering → report).
+const FILE_PHASES: { label: string; detail: string }[] = [
+  { label: 'Preparing',               detail: 'Securing a working copy of the file' },
+  { label: 'Fingerprinting',          detail: 'Computing the SHA-256 hash' },
+  { label: 'Content scan',            detail: 'Extracting links, IPs and suspicious strings' },
+  { label: 'Structure analysis',      detail: 'Inspecting the file\'s internal structure' },
+  { label: 'Document inspection',     detail: 'Checking for macros, scripts and auto-actions' },
+  { label: 'Signature rules',         detail: 'Matching against YARA threat signatures' },
+  { label: 'Threat databases',        detail: 'Querying MalwareBazaar and ThreatFox' },
+  { label: 'Antivirus consensus',     detail: 'Checking 60+ engines via VirusTotal' },
+  { label: 'Network indicators',      detail: 'Investigating any embedded servers and domains' },
+  { label: 'Risk calculation',        detail: 'Weighing all the evidence into one score' },
+  { label: 'Cross-referencing',       detail: 'Comparing with previous scans' },
+  { label: 'Report generation',       detail: 'Preparing your detailed report' },
+]
+
+const URL_PHASES: { label: string; detail: string }[] = [
+  { label: 'Preparing',               detail: 'Parsing and normalising the link' },
+  { label: 'Link analysis',           detail: 'Checking for impersonation and lookalike tricks' },
+  { label: 'Threat databases',        detail: 'Querying URLhaus and ThreatFox' },
+  { label: 'Domain ownership',        detail: 'Looking up WHOIS registration records' },
+  { label: 'Network records',         detail: 'Resolving DNS and infrastructure data' },
+  { label: 'Location mapping',        detail: 'Locating the hosting servers' },
+  { label: 'Sandbox visit',           detail: 'Loading the page safely via URLScan.io' },
+  { label: 'Antivirus consensus',     detail: 'Checking 60+ engines via VirusTotal' },
+  { label: 'Risk calculation',        detail: 'Weighing all the evidence into one score' },
   { label: 'Cross-referencing',       detail: 'Comparing with previous scans' },
   { label: 'Report generation',       detail: 'Preparing your detailed report' },
 ]
@@ -30,51 +49,57 @@ export default function ScanningScreen() {
     uri?: string; url?: string; filename?: string; source?: string; mimeType?: string
   }>()
 
-  const [jobId, setJobId]   = useState<string | null>(null)
-  const [phase, setPhase]   = useState(0)
+  const [jobId, setJobId]     = useState<string | null>(null)
+  const [phase, setPhase]     = useState(0)
   const [elapsed, setElapsed] = useState(0)
-  const [error, setError]   = useState<string | null>(null)
-  const [done, setDone]     = useState(false)
-
-  const phaseTimer   = useRef<ReturnType<typeof setInterval> | null>(null)
-  const elapsedTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [error, setError]     = useState<string | null>(null)
+  const [done, setDone]       = useState(false)
+  // Bumping runId restarts the whole upload + timer pipeline (Try Again).
+  const [runId, setRunId]     = useState(0)
 
   const s = makeStyles(colors, fonts)
+  const phases = url ? URL_PHASES : FILE_PHASES
 
   // Animated progress bar
   const progressAnim = useRef(new Animated.Value(0)).current
-  const progress = Math.min(((phase + 1) / PHASES.length) * 100, done ? 100 : 95)
+  const progress = done ? 100 : Math.min(((phase + 1) / phases.length) * 100, 95)
 
   useEffect(() => {
     Animated.timing(progressAnim, { toValue: progress, duration: 400, useNativeDriver: false }).start()
   }, [progress])
 
-  // Phase cycling
+  // Phase cycling, elapsed clock, and stuck-scan watchdog — all stop on done/error
   useEffect(() => {
-    phaseTimer.current   = setInterval(() => setPhase(p => Math.min(p + 1, PHASES.length - 1)), 2200)
-    elapsedTimer.current = setInterval(() => setElapsed(e => e + 1), 1000)
+    if (done || error) return
+    const phaseTimer   = setInterval(() => setPhase(p => Math.min(p + 1, phases.length - 1)), 2200)
+    const elapsedTimer = setInterval(() => setElapsed(e => e + 1), 1000)
+    const watchdog     = setTimeout(() => {
+      setError('The scan is taking much longer than expected. The engine may be stuck — please try again.')
+    }, SCAN_TIMEOUT_MS)
     return () => {
-      if (phaseTimer.current)   clearInterval(phaseTimer.current)
-      if (elapsedTimer.current) clearInterval(elapsedTimer.current)
+      clearInterval(phaseTimer)
+      clearInterval(elapsedTimer)
+      clearTimeout(watchdog)
     }
-  }, [])
+  }, [runId, done, error])
 
   // Upload
   useEffect(() => {
+    let cancelled = false
     const start = async () => {
       try {
         let id: string
         if (uri)       id = await uploadFile(uri, filename || 'scan_target')
         else if (url)  id = await submitUrl(url)
         else { setError('No file or URL provided.'); return }
-        setJobId(id)
+        if (!cancelled) setJobId(id)
       } catch (e: any) {
-        const msg = e?.response?.data?.detail || e?.message || 'Upload failed.'
-        setError(`${msg}\n\nIs the backend running? Check Settings.`)
+        if (!cancelled) setError(describeApiError(e))
       }
     }
     start()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { cancelled = true }
+  }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll
   const scanResult = useScanPoller(jobId)
@@ -82,8 +107,6 @@ export default function ScanningScreen() {
     if (!scanResult) return
     if (scanResult.status === 'Completed' && !done) {
       setDone(true)
-      if (phaseTimer.current)   clearInterval(phaseTimer.current)
-      if (elapsedTimer.current) clearInterval(elapsedTimer.current)
       const r = scanResult.results
       if (r) {
         addToHistory({ jobId: scanResult.job_id, target: filename || url || uri || 'Unknown',
@@ -94,10 +117,20 @@ export default function ScanningScreen() {
         params: { jobId: scanResult.job_id, originalUri: uri || '', mimeType: mimeType || '' },
       }), 600)
     }
-    if (scanResult.status === 'Failed') setError('The scan engine encountered an error. Please try again.')
+    if (scanResult.status === 'Failed') setError('The scan engine encountered an error while analysing this file. Please try again.')
   }, [scanResult]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const currentPhase = PHASES[Math.min(phase, PHASES.length - 1)]
+  const handleRetry = () => {
+    setError(null)
+    setJobId(null)
+    setPhase(0)
+    setElapsed(0)
+    setDone(false)
+    setRunId(r => r + 1)
+  }
+
+  const currentPhase = phases[Math.min(phase, phases.length - 1)]
+  const targetName = filename || url || 'Unknown target'
 
   return (
     <SafeAreaView style={s.safe}>
@@ -114,9 +147,14 @@ export default function ScanningScreen() {
         {/* Shield */}
         <View style={s.shieldWrap}>
           <View style={s.shieldCircle}>
-            <Text style={s.shieldGlyph}>🛡</Text>
+            <ShieldIcon
+              size={50}
+              color={error ? colors.verdicts.malicious : colors.accent}
+              checkColor={colors.surface}
+            />
           </View>
           <Text style={s.analysingText}>{url ? 'Analysing link' : 'Analysing your file'}</Text>
+          <Text style={s.targetName} numberOfLines={1}>{targetName}</Text>
           <Text style={s.sourceText}>
             {source === 'manual' ? 'Link submitted for analysis'
             : source === 'share' ? 'URL received via share'
@@ -149,6 +187,14 @@ export default function ScanningScreen() {
           <View style={s.errorCard}>
             <Text style={s.errorTitle}>Something went wrong</Text>
             <Text style={s.errorBody}>{error}</Text>
+            <View style={s.errorActions}>
+              <TouchableOpacity style={s.retryBtn} onPress={handleRetry} activeOpacity={0.8}>
+                <Text style={s.retryBtnText}>Try Again</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.backBtn} onPress={() => router.back()} activeOpacity={0.8}>
+                <Text style={s.backBtnText}>Go Back</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
@@ -157,7 +203,7 @@ export default function ScanningScreen() {
           <View style={s.infoCard}>
             <View style={s.infoRow}>
               <Text style={s.infoKey}>File</Text>
-              <Text style={s.infoVal} numberOfLines={1}>{filename || url || 'Unknown'}</Text>
+              <Text style={s.infoVal} numberOfLines={1}>{targetName}</Text>
             </View>
             <View style={s.infoRow}>
               <Text style={s.infoKey}>Status</Text>
@@ -168,7 +214,7 @@ export default function ScanningScreen() {
 
         {/* Phase steps — simple dots */}
         <View style={s.dots}>
-          {PHASES.map((_, i) => (
+          {phases.map((_, i) => (
             <View
               key={i}
               style={[s.dot, i <= phase && !error && s.dotActive, done && s.dotDone]}
@@ -179,13 +225,13 @@ export default function ScanningScreen() {
       </View>
 
       {/* Bottom bar */}
-      <View style={[s.bottomBar, error && s.bottomBarError]}>
+      <View style={[s.bottomBar, error ? s.bottomBarError : null]}>
         {error ? (
-          <TouchableOpacity onPress={() => router.back()}>
-            <Text style={s.bottomBarText}>← Go back and try again</Text>
-          </TouchableOpacity>
+          <Text style={s.bottomBarText}>The file was not opened — you are safe.</Text>
         ) : (
-          <Text style={s.bottomBarText}>Please keep the app open during scanning</Text>
+          <TouchableOpacity onPress={() => router.back()}>
+            <Text style={s.bottomBarText}>Keep the app open during scanning · Tap to cancel</Text>
+          </TouchableOpacity>
         )}
       </View>
     </SafeAreaView>
@@ -204,7 +250,7 @@ const makeStyles = (colors: any, fonts: any) => StyleSheet.create({
   pillError:  { backgroundColor: colors.verdicts.maliciousDim },
   pillText: { fontFamily: fonts.body, fontSize: 12, color: colors.text.secondary },
 
-  shieldWrap: { alignItems: 'center', marginBottom: 36 },
+  shieldWrap: { alignItems: 'center', marginBottom: 32 },
   shieldCircle: {
     width: 96, height: 96, borderRadius: 48,
     backgroundColor: colors.surface,
@@ -212,8 +258,8 @@ const makeStyles = (colors: any, fonts: any) => StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     marginBottom: 16, elevation: 4,
   },
-  shieldGlyph: { fontSize: 48 },
   analysingText: { fontFamily: fonts.heading, fontSize: 22, fontWeight: '700', color: colors.text.primary, marginBottom: 4 },
+  targetName: { fontFamily: fonts.mono, fontSize: 13, color: colors.text.secondary, marginBottom: 4, maxWidth: '90%' },
   sourceText: { fontFamily: fonts.body, fontSize: 13, color: colors.text.muted },
 
   progressTrack: { height: 6, backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden', marginBottom: 8 },
@@ -235,6 +281,11 @@ const makeStyles = (colors: any, fonts: any) => StyleSheet.create({
   },
   errorTitle: { fontFamily: fonts.heading, fontSize: 15, fontWeight: '600', color: colors.verdicts.malicious, marginBottom: 6 },
   errorBody: { fontFamily: fonts.body, fontSize: 13, color: colors.text.secondary, lineHeight: 20 },
+  errorActions: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  retryBtn: { flex: 1, backgroundColor: colors.accent, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
+  retryBtnText: { fontFamily: fonts.heading, fontSize: 14, fontWeight: '600', color: '#fff' },
+  backBtn: { flex: 1, backgroundColor: colors.surface, borderRadius: 10, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: colors.border },
+  backBtnText: { fontFamily: fonts.body, fontSize: 14, color: colors.text.secondary },
 
   infoCard: {
     backgroundColor: colors.surface, borderRadius: 14, padding: 16,

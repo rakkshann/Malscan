@@ -42,19 +42,13 @@ logger = logging.getLogger(__name__)
 # ── Known-hash blocklist ─────────────────────────────────────────────────────
 
 KNOWN_MALICIOUS_HASHES = {
-    # EICAR Standard Antivirus Test File (SHA-256)
+    # EICAR Standard Antivirus Test File (SHA-256) — real, industry-standard test hash.
+    # Live malware hash coverage comes from MalwareBazaar/ThreatFox lookups, not this list.
     "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f": {
         "score": 100,
         "family": "EICAR-Test-File",
         "attribution": "Unattributed",
         "reason": "EICAR standard antivirus test file detected by SHA-256 hash.",
-    },
-    # Common Emotet loader samples (illustrative — add real hashes here)
-    "a3b15c8d4e1276f1e0c3b5a7d9e2f4c6a8b0d2e4f6a8c0b2d4e6f8a0c2b4d6e8": {
-        "score": 100,
-        "family": "Trojan.Win32.Emotet",
-        "attribution": "TA542",
-        "reason": "Known Emotet loader sample detected by SHA-256 hash.",
     },
 }
 
@@ -344,22 +338,36 @@ def _check_abuseipdb(osint: dict):
 
 
 def _check_document_threats(doc_data: dict):
+    """PDF/Office threat scoring.
+
+    Calibration note: /JavaScript and /OpenAction individually are extremely
+    common in LEGITIMATE PDFs (interactive forms, "open at page 1" actions),
+    so alone they are weak signals. The dangerous pattern is JavaScript wired
+    directly to an auto-trigger, or a Launch action — those stay heavy.
+    """
     score, reasons = 0, []
     if not doc_data or doc_data.get("doc_type") == "unknown":
         return score, reasons
 
-    if doc_data.get("has_javascript"):
-        score += 40
-        reasons.append("PDF contains embedded JavaScript — can execute code when the file is opened.")
-    if doc_data.get("has_auto_action"):
-        score += 35
-        reasons.append("PDF has an automatic action that triggers on open without user interaction.")
     if doc_data.get("has_launch_action"):
         score += 45
         reasons.append("PDF contains a Launch action — can execute external programs on your device.")
+
+    if doc_data.get("has_js_auto_combo"):
+        # JS bound straight to an open/auto trigger — classic drive-by PDF.
+        score += 45
+        reasons.append("PDF runs embedded JavaScript automatically when opened — a pattern heavily used by malicious PDFs.")
+    else:
+        if doc_data.get("has_javascript"):
+            score += 15
+            reasons.append("PDF contains JavaScript — common in interactive forms, but worth caution.")
+        if doc_data.get("has_auto_action"):
+            score += 10
+            reasons.append("PDF performs an action on open (often just page navigation).")
+
     if doc_data.get("has_embedded_files"):
-        score += 20
-        reasons.append("PDF contains embedded files — unusual for a legitimate document.")
+        score += 10
+        reasons.append("PDF contains embedded files — uncommon for an ordinary document.")
     if doc_data.get("has_macros"):
         score += 45
         reasons.append("Office document contains VBA macros — the primary delivery mechanism for macro malware.")
@@ -463,9 +471,14 @@ def calculate_score(analysis_data: dict) -> dict:
     geoip = osint.get("geoip", {}) or {}
     dns   = osint.get("dns", {})   or {}
 
-    total, all_reasons = 0, []
+    all_reasons = []
     family, attribution = None, None
     age = None  # populated by heuristic score path only
+
+    # Confirmed threat-intel evidence and heuristic suspicion are tracked
+    # separately: a clean VirusTotal consensus may dampen heuristics, but it
+    # must never water down a confirmed MalwareBazaar/ThreatFox/YARA hit.
+    intel_total, heuristic_total = 0, 0
 
     # ── Tier 1: Definitive hash matches (short-circuit if confirmed malware) ──
     file_hash = analysis_data.get("file_hash")
@@ -473,36 +486,54 @@ def calculate_score(analysis_data: dict) -> dict:
     # Internal blocklist
     hash_score, hash_reasons, hash_family, hash_attribution = _check_known_hashes(file_hash)
     if hash_score > 0:
-        total += hash_score; all_reasons += hash_reasons
+        intel_total += hash_score; all_reasons += hash_reasons
         family = hash_family; attribution = hash_attribution
 
     # MalwareBazaar (external, authoritative hash DB)
-    s, r = _check_malwarebazaar(osint); total += s; all_reasons += r
+    s, r = _check_malwarebazaar(osint); intel_total += s; all_reasons += r
 
     # YARA rule matches (pattern-based, very high confidence)
-    s, r = _check_yara(osint); total += s; all_reasons += r
+    s, r = _check_yara(osint); intel_total += s; all_reasons += r
 
     # ── Tier 2: IOC-based threat intelligence ─────────────────────────────────
-    s, r = _check_threatfox(osint);  total += s; all_reasons += r
-    s, r = _check_urlhaus(osint);    total += s; all_reasons += r
-    s, r = _check_abuseipdb(osint);  total += s; all_reasons += r
+    s, r = _check_threatfox(osint);  intel_total += s; all_reasons += r
+    s, r = _check_urlhaus(osint);    intel_total += s; all_reasons += r
+    s, r = _check_abuseipdb(osint);  intel_total += s; all_reasons += r
 
     # ── Tier 3: Document-specific threats ─────────────────────────────────────
-    s, r = _check_document_threats(analysis_data.get("document", {})); total += s; all_reasons += r
+    s, r = _check_document_threats(analysis_data.get("document", {})); heuristic_total += s; all_reasons += r
 
     # ── Tier 4: Heuristic signals (always run) ────────────────────────────────
-    s, r      = _check_enhanced_static(static);    total += s; all_reasons += r
-    s, r      = _check_pe_sections(static);        total += s; all_reasons += r
-    s, r, age = _check_domain_age(whois);          total += s; all_reasons += r
-    s, r      = _check_registrar(whois);           total += s; all_reasons += r
-    s, r      = _check_geoip(geoip);               total += s; all_reasons += r
-    s, r      = _check_url_flags(url_data);        total += s; all_reasons += r
-    s, r      = _check_ioc_volume(iocs);           total += s; all_reasons += r
-    s, r      = _check_virustotal(osint);          total += s; all_reasons += r
-    s, r      = _check_urlscan(osint);             total += s; all_reasons += r
-    s, r      = _check_apk_permissions(analysis_data.get("apk", {})); total += s; all_reasons += r
+    s, r      = _check_enhanced_static(static);    heuristic_total += s; all_reasons += r
+    s, r      = _check_pe_sections(static);        heuristic_total += s; all_reasons += r
+    s, r, age = _check_domain_age(whois);          heuristic_total += s; all_reasons += r
+    s, r      = _check_registrar(whois);           heuristic_total += s; all_reasons += r
+    s, r      = _check_geoip(geoip);               heuristic_total += s; all_reasons += r
+    s, r      = _check_url_flags(url_data);        heuristic_total += s; all_reasons += r
+    s, r      = _check_ioc_volume(iocs);           heuristic_total += s; all_reasons += r
+    s, r      = _check_virustotal(osint);          intel_total += s; all_reasons += r
+    s, r      = _check_urlscan(osint);             heuristic_total += s; all_reasons += r
+    s, r      = _check_apk_permissions(analysis_data.get("apk", {})); heuristic_total += s; all_reasons += r
 
-    final_score = min(total, 100)
+    # ── Benign-consensus dampening ────────────────────────────────────────────
+    # If a broad VirusTotal scan (40+ engines) found NOTHING, halve the purely
+    # heuristic suspicion — fixes false positives on ordinary PDFs/documents
+    # whose features (forms JS, open actions) merely look unusual.
+    vt_stats = (osint.get("virustotal") or {}).get("stats") or {}
+    vt_engines = sum(vt_stats.get(k, 0) for k in ("malicious", "suspicious", "harmless", "undetected"))
+    if (
+        heuristic_total > 0
+        and intel_total == 0
+        and vt_engines >= 40
+        and vt_stats.get("malicious", 0) == 0
+        and vt_stats.get("suspicious", 0) == 0
+    ):
+        heuristic_total = heuristic_total // 2
+        all_reasons.append(
+            f"Reassuring signal: {vt_engines} antivirus engines on VirusTotal scanned this and none flagged it — risk score reduced accordingly."
+        )
+
+    final_score = min(intel_total + heuristic_total, 100)
     verdict = "Malicious" if final_score >= 70 else "Suspicious" if final_score >= 35 else "Clear"
 
     graph_nodes, graph_edges = _build_graph(iocs, geoip, whois)

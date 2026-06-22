@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
-  Alert, ScrollView, Share, StyleSheet, Text,
-  ToastAndroid, TouchableOpacity, View,
+  Alert, Animated, ScrollView, Share, StyleSheet, Text,
+  ToastAndroid, TouchableOpacity, Vibration, View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router, useLocalSearchParams } from 'expo-router'
@@ -12,6 +12,7 @@ import { ThreatScoreGauge } from '../components/ThreatScoreGauge'
 import { VtConsensus } from '../components/VtConsensus'
 import { IocList } from '../components/IocList'
 import { GeoRisk } from '../components/GeoRisk'
+import { PressableScale } from '../components/PressableScale'
 import { useTheme } from '../contexts/ThemeContext'
 
 type Verdict = 'Malicious' | 'Suspicious' | 'Clear'
@@ -50,8 +51,8 @@ async function copyValue(value: string, label: string) {
   ToastAndroid.show(`${label} copied`, ToastAndroid.SHORT)
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false)
+function Section({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen)
   const { colors, fonts } = useTheme()
   return (
     <View style={{ marginBottom: 10 }}>
@@ -97,6 +98,16 @@ export default function VerdictScreen() {
       .finally(() => setLoading(false))
   }, [jobId])
 
+  // Verdict reveal: entrance animation + a vibration pattern matching severity
+  const heroAnim = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    if (!results) return
+    Animated.spring(heroAnim, { toValue: 1, useNativeDriver: true, speed: 14, bounciness: 7 }).start()
+    if (results.verdict === 'Malicious')        Vibration.vibrate([0, 90, 70, 90, 70, 180])
+    else if (results.verdict === 'Suspicious')  Vibration.vibrate([0, 70, 90, 70])
+    else                                        Vibration.vibrate(35)
+  }, [results]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleShare = async (v: Verdict, r: ScanResults) => {
     const body = [
       'MalScan Security Report',
@@ -123,14 +134,34 @@ export default function VerdictScreen() {
     } catch { Alert.alert('Cannot open', 'No app found to handle this file type.') }
   }
 
+  const handleOpenAnyway = () => {
+    Alert.alert(
+      'Open this file anyway?',
+      'MalScan flagged this file as suspicious. Opening it could put your device at risk. Only continue if you trust where it came from.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open Anyway', style: 'destructive', onPress: handleOpen },
+      ],
+    )
+  }
+
   const handleDelete = () => {
-    Alert.alert('Delete File', 'Remove this file from MalScan? The original in WhatsApp is unaffected.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-        if (originalUri) await FileSystem.deleteAsync(originalUri, { idempotent: true })
-        router.replace('/')
-      }},
-    ])
+    Alert.alert(
+      'Discard File',
+      "This removes MalScan's working copy so the file can't be opened from here. The original still exists in the app it came from (e.g. WhatsApp) — delete it there too.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Discard', style: 'destructive', onPress: async () => {
+          try {
+            if (originalUri) await FileSystem.deleteAsync(originalUri, { idempotent: true })
+            ToastAndroid.show('Working copy removed', ToastAndroid.SHORT)
+          } catch {
+            ToastAndroid.show('Copy already removed', ToastAndroid.SHORT)
+          }
+          router.replace('/')
+        }},
+      ],
+    )
   }
 
   if (loading) {
@@ -179,37 +210,56 @@ export default function VerdictScreen() {
       <ScrollView contentContainerStyle={s.scroll}>
 
         {/* ── Verdict hero ───────────────────────────────────────────────── */}
-        <View style={[s.verdictCard, { backgroundColor: vd.dim, borderColor: vd.border }]}>
+        <Animated.View
+          style={[
+            s.verdictCard,
+            { backgroundColor: vd.dim, borderColor: vd.border },
+            {
+              opacity: heroAnim,
+              transform: [{ scale: heroAnim.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] }) }],
+            },
+          ]}
+        >
           <Text style={s.verdictEmoji}>{vd.emoji}</Text>
           <Text style={[s.verdictLabel, { color: vd.color }]}>{vd.label}</Text>
           <Text style={s.verdictSublabel}>{vd.sublabel}</Text>
           <ThreatScoreGauge score={results.score} color={vd.color} />
-        </View>
+        </Animated.View>
 
         {/* ── Action buttons ─────────────────────────────────────────────── */}
         <View style={s.actions}>
-          {isClear && originalUri ? (
-            <TouchableOpacity style={[s.actionBtn, { backgroundColor: colors.verdicts.clear }]} onPress={handleOpen} activeOpacity={0.85}>
+          {isClear && originalUri && (
+            <PressableScale style={[s.actionBtn, { backgroundColor: colors.verdicts.clear }]} onPress={handleOpen}>
               <Text style={s.actionBtnText}>Open File</Text>
-            </TouchableOpacity>
-          ) : null}
-          <TouchableOpacity
-            style={[s.actionBtn, isClear
-              ? { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }
-              : { backgroundColor: colors.verdicts.maliciousDim, borderWidth: 1, borderColor: colors.verdicts.maliciousBorder }
-            ]}
-            onPress={isClear ? () => router.replace('/') : handleDelete}
-            activeOpacity={0.85}
+            </PressableScale>
+          )}
+          {!isClear && (
+            <PressableScale
+              style={[s.actionBtn, { backgroundColor: colors.verdicts.maliciousDim, borderWidth: 1, borderColor: colors.verdicts.maliciousBorder }]}
+              onPress={handleDelete}
+            >
+              <Text style={[s.actionBtnText, { color: colors.verdicts.malicious }]}>Discard File</Text>
+            </PressableScale>
+          )}
+          {verdict === 'Suspicious' && originalUri && (
+            <PressableScale
+              style={[s.actionBtn, { backgroundColor: colors.verdicts.suspiciousDim, borderWidth: 1, borderColor: colors.verdicts.suspiciousBorder }]}
+              onPress={handleOpenAnyway}
+            >
+              <Text style={[s.actionBtnText, { color: colors.verdicts.suspicious }]}>Open Anyway</Text>
+            </PressableScale>
+          )}
+          <PressableScale
+            style={[s.actionBtn, { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }]}
+            onPress={() => router.replace('/')}
           >
-            <Text style={[s.actionBtnText, { color: isClear ? colors.text.secondary : colors.verdicts.malicious }]}>
-              {isClear ? 'Done' : 'Delete File'}
-            </Text>
-          </TouchableOpacity>
+            <Text style={[s.actionBtnText, { color: colors.text.secondary }]}>Done</Text>
+          </PressableScale>
         </View>
 
         {/* ── Key findings ───────────────────────────────────────────────── */}
         {results.reasons.length > 0 && (
-          <Section title={`What we found (${results.reasons.length})`}>
+          <Section title={`What we found (${results.reasons.length})`} defaultOpen>
             {results.reasons.map((r, i) => (
               <View key={i} style={s.reasonRow}>
                 <Text style={[s.reasonBullet, { color: vd.color }]}>•</Text>
@@ -221,7 +271,7 @@ export default function VerdictScreen() {
 
         {/* ── VirusTotal ─────────────────────────────────────────────────── */}
         {vtStats && (
-          <Section title="Security engine results">
+          <Section title="Security engine results" defaultOpen>
             <VtConsensus stats={vtStats} />
           </Section>
         )}
@@ -312,10 +362,10 @@ const makeStyles = (colors: any, fonts: any) => StyleSheet.create({
 
   scroll: { padding: 20, gap: 10, paddingBottom: 48 },
 
-  verdictCard: { borderRadius: 20, padding: 28, alignItems: 'center', borderWidth: 1, marginBottom: 4, gap: 8 },
-  verdictEmoji: { fontSize: 52 },
-  verdictLabel: { fontFamily: fonts.heading, fontSize: 26, fontWeight: '700', textAlign: 'center' },
-  verdictSublabel: { fontFamily: fonts.body, fontSize: 14, color: colors.text.secondary, textAlign: 'center', lineHeight: 20 },
+  verdictCard: { borderRadius: 22, paddingVertical: 32, paddingHorizontal: 24, alignItems: 'center', borderWidth: 1, marginBottom: 4, gap: 12 },
+  verdictEmoji: { fontSize: 40, marginBottom: 2 },
+  verdictLabel: { fontFamily: fonts.heading, fontSize: 27, fontWeight: '700', textAlign: 'center', letterSpacing: 0.3 },
+  verdictSublabel: { fontFamily: fonts.body, fontSize: 14, color: colors.text.secondary, textAlign: 'center', lineHeight: 21, maxWidth: 300 },
 
   actions: { gap: 10, marginBottom: 4 },
   actionBtn: { borderRadius: 14, paddingVertical: 16, alignItems: 'center' },

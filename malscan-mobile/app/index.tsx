@@ -18,14 +18,21 @@ import * as DocumentPicker from 'expo-document-picker'
 import { useFileIntent } from '../hooks/useFileIntent'
 import { useTheme } from '../contexts/ThemeContext'
 import { checkHealth } from '../services/api'
+import { getHistory, ScanSummary } from '../services/history'
+import { ShieldIcon } from '../components/ShieldIcon'
+import { PressableScale } from '../components/PressableScale'
 
 type ConnStatus = 'checking' | 'online' | 'offline'
 
 const HOW_TO_STEPS = [
-  { num: '1', text: 'Receive a file on WhatsApp' },
-  { num: '2', text: 'Long-press the file → Share → Open with MalScan' },
-  { num: '3', text: 'MalScan scans it safely before you open it' },
+  { num: '1', text: 'Receive a file in WhatsApp, Gmail or any other app' },
+  { num: '2', text: 'Tap Share → Open with MalScan' },
+  { num: '3', text: 'MalScan checks it safely before you open it' },
 ]
+
+function decodeName(raw: string): string {
+  try { return decodeURIComponent(raw) } catch { return raw }
+}
 
 export default function HomeScreen() {
   const { colors, fonts } = useTheme()
@@ -33,6 +40,7 @@ export default function HomeScreen() {
   const [urlInput, setUrlInput] = useState('')
   const [isPicking, setIsPicking] = useState(false)
   const [connStatus, setConnStatus] = useState<ConnStatus>('checking')
+  const [history, setHistory] = useState<ScanSummary[]>([])
 
   const s = makeStyles(colors, fonts)
 
@@ -47,18 +55,21 @@ export default function HomeScreen() {
     ).start()
   }, [])
 
-  // Real backend health check
+  // Real backend health check + refresh history on every focus
   const runHealthCheck = useCallback(async () => {
     setConnStatus('checking')
     setConnStatus(await checkHealth() ? 'online' : 'offline')
   }, [])
 
-  useFocusEffect(useCallback(() => { runHealthCheck() }, [runHealthCheck]))
+  useFocusEffect(useCallback(() => {
+    runHealthCheck()
+    getHistory().then(setHistory)
+  }, [runHealthCheck]))
 
   // Intent intercept
   useEffect(() => {
     if (!intentUri) return
-    const name = intentUri.split('/').pop() || 'scan_target'
+    const name = decodeName(intentUri.split('/').pop() || 'scan_target')
     router.push({ pathname: '/scanning', params: { uri: intentUri, filename: name, source: 'intent', mimeType: intentMimeType || '' } })
   }, [intentUri])
 
@@ -93,10 +104,18 @@ export default function HomeScreen() {
     router.push({ pathname: '/scanning', params: { url: trimmed, source: 'manual' } })
   }
 
+  const threatsFound = history.filter(h => h.verdict !== 'Clear').length
+  const recent = history.slice(0, 3)
+
   const dotColor =
     connStatus === 'online'  ? colors.verdicts.clear
     : connStatus === 'offline' ? colors.verdicts.malicious
     : colors.verdicts.suspicious
+
+  const verdictColor = (v: ScanSummary['verdict']) =>
+    v === 'Malicious' ? colors.verdicts.malicious
+    : v === 'Suspicious' ? colors.verdicts.suspicious
+    : colors.verdicts.clear
 
   return (
     <SafeAreaView style={s.safe}>
@@ -123,44 +142,26 @@ export default function HomeScreen() {
           {/* ── Hero ───────────────────────────────────────────────────────── */}
           <View style={s.hero}>
             <Animated.View style={[s.iconCircle, { transform: [{ scale: pulse }] }]}>
-              <Text style={s.iconGlyph}>🛡</Text>
+              <ShieldIcon size={46} color={colors.accent} checkColor={colors.surface} />
             </Animated.View>
             <Text style={s.appName}>MalScan</Text>
             <Text style={s.tagline}>Scan before you open</Text>
           </View>
 
-          {/* ── How it works ───────────────────────────────────────────────── */}
+          {/* ── Scan actions ───────────────────────────────────────────────── */}
           <View style={s.card}>
-            <Text style={s.cardTitle}>How to scan a WhatsApp file</Text>
-            {HOW_TO_STEPS.map(step => (
-              <View key={step.num} style={s.step}>
-                <View style={s.stepNum}>
-                  <Text style={s.stepNumText}>{step.num}</Text>
-                </View>
-                <Text style={s.stepText}>{step.text}</Text>
-              </View>
-            ))}
-          </View>
-
-          {/* ── Pick from device ───────────────────────────────────────────── */}
-          <View style={s.card}>
-            <Text style={s.cardTitle}>Or pick a file from your device</Text>
-            <TouchableOpacity
-              style={[s.primaryBtn, isPicking && s.primaryBtnDisabled]}
+            <Text style={s.cardTitle}>Scan a file</Text>
+            <PressableScale
+              style={[s.primaryBtn, isPicking ? s.primaryBtnDisabled : null]}
               onPress={handlePickFile}
-              activeOpacity={0.8}
               disabled={isPicking}
             >
               {isPicking
                 ? <ActivityIndicator color="#fff" />
                 : <Text style={s.primaryBtnText}>Select File</Text>
               }
-            </TouchableOpacity>
-          </View>
-
-          {/* ── Scan a URL ─────────────────────────────────────────────────── */}
-          <View style={s.card}>
-            <Text style={s.cardTitle}>Scan a link</Text>
+            </PressableScale>
+            <Text style={s.cardDivider}>or scan a link</Text>
             <View style={s.urlRow}>
               <TextInput
                 style={s.urlInput}
@@ -178,6 +179,61 @@ export default function HomeScreen() {
                 <Text style={s.urlBtnText}>Scan</Text>
               </TouchableOpacity>
             </View>
+          </View>
+
+          {/* ── Protection stats ───────────────────────────────────────────── */}
+          {history.length > 0 && (
+            <View style={s.statsRow}>
+              <View style={s.statBox}>
+                <Text style={s.statNum}>{history.length}</Text>
+                <Text style={s.statLabel}>Files scanned</Text>
+              </View>
+              <View style={s.statBox}>
+                <Text style={[s.statNum, threatsFound > 0 && { color: colors.verdicts.malicious }]}>
+                  {threatsFound}
+                </Text>
+                <Text style={s.statLabel}>Threats caught</Text>
+              </View>
+            </View>
+          )}
+
+          {/* ── Recent scans ───────────────────────────────────────────────── */}
+          {recent.length > 0 && (
+            <View style={s.card}>
+              <View style={s.recentHeader}>
+                <Text style={s.cardTitle}>Recent scans</Text>
+                <TouchableOpacity onPress={() => router.push('/history')}>
+                  <Text style={s.viewAll}>View all →</Text>
+                </TouchableOpacity>
+              </View>
+              {recent.map(item => (
+                <TouchableOpacity
+                  key={item.jobId}
+                  style={s.recentRow}
+                  onPress={() => router.push({ pathname: '/verdict', params: { jobId: item.jobId } })}
+                  activeOpacity={0.7}
+                >
+                  <View style={[s.recentDot, { backgroundColor: verdictColor(item.verdict) }]} />
+                  <Text style={s.recentName} numberOfLines={1}>{item.target}</Text>
+                  <Text style={[s.recentVerdict, { color: verdictColor(item.verdict) }]}>
+                    {item.verdict === 'Clear' ? 'Safe' : item.verdict}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          {/* ── How it works ───────────────────────────────────────────────── */}
+          <View style={s.card}>
+            <Text style={s.cardTitle}>How to scan a shared file</Text>
+            {HOW_TO_STEPS.map(step => (
+              <View key={step.num} style={s.step}>
+                <View style={s.stepNum}>
+                  <Text style={s.stepNumText}>{step.num}</Text>
+                </View>
+                <Text style={s.stepText}>{step.text}</Text>
+              </View>
+            ))}
           </View>
 
           {/* ── Status footer ──────────────────────────────────────────────── */}
@@ -214,7 +270,7 @@ const makeStyles = (colors: any, fonts: any) => StyleSheet.create({
   },
   topBtnText: { fontFamily: fonts.body, fontSize: 13, color: colors.text.secondary },
 
-  hero: { alignItems: 'center', marginBottom: 32 },
+  hero: { alignItems: 'center', marginBottom: 28 },
   iconCircle: {
     width: 88,
     height: 88,
@@ -227,7 +283,6 @@ const makeStyles = (colors: any, fonts: any) => StyleSheet.create({
     marginBottom: 16,
     elevation: 4,
   },
-  iconGlyph: { fontSize: 42 },
   appName: {
     fontFamily: fonts.heading,
     fontSize: 34,
@@ -258,6 +313,41 @@ const makeStyles = (colors: any, fonts: any) => StyleSheet.create({
     color: colors.text.primary,
     marginBottom: 16,
   },
+  cardDivider: {
+    fontFamily: fonts.body,
+    fontSize: 12,
+    color: colors.text.muted,
+    textAlign: 'center',
+    marginVertical: 14,
+  },
+
+  statsRow: { flexDirection: 'row', gap: 14, marginBottom: 14 },
+  statBox: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 16,
+    alignItems: 'center',
+    elevation: 2,
+  },
+  statNum: { fontFamily: fonts.heading, fontSize: 26, fontWeight: '700', color: colors.text.primary, marginBottom: 2 },
+  statLabel: { fontFamily: fonts.body, fontSize: 12, color: colors.text.muted },
+
+  recentHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  viewAll: { fontFamily: fonts.body, fontSize: 13, color: colors.accent },
+  recentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderFaint,
+  },
+  recentDot: { width: 8, height: 8, borderRadius: 4 },
+  recentName: { fontFamily: fonts.body, fontSize: 13, color: colors.text.secondary, flex: 1 },
+  recentVerdict: { fontFamily: fonts.body, fontSize: 12, fontWeight: '600' },
 
   step: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12, gap: 12 },
   stepNum: {

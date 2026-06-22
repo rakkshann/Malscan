@@ -7,7 +7,7 @@ export function useScanPoller(jobId: string | null): StatusResponse | null {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
-    if (!jobId) return
+    if (!jobId) { setResult(null); return }
 
     const poll = async () => {
       try {

@@ -105,6 +105,29 @@ export async function checkHealth(): Promise<boolean> {
   }
 }
 
+// ── Error helpers ─────────────────────────────────────────────────────────────
+
+/** Matches MAX_UPLOAD_BYTES in backend/app/main.py */
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+export class FileTooLargeError extends Error {
+  constructor() {
+    super('This file is larger than the 50 MB scan limit.')
+    this.name = 'FileTooLargeError'
+  }
+}
+
+/** Turns any upload/poll failure into a message a non-technical user can act on. */
+export function describeApiError(e: any): string {
+  if (e instanceof FileTooLargeError) return e.message
+  const detail = e?.response?.data?.detail
+  if (detail) return String(detail)
+  if (e?.response) return `The scan engine returned an error (HTTP ${e.response.status}). Please try again.`
+  if (e?.code === 'ECONNABORTED') return 'The connection timed out. The file may be too large for your network, or the engine is overloaded.'
+  if (e?.request) return 'Could not reach the scan engine. Make sure the backend is running and the URL in Settings is correct.'
+  return e?.message || 'Something went wrong. Please try again.'
+}
+
 // ── API calls ─────────────────────────────────────────────────────────────────
 
 export async function uploadFile(
@@ -116,20 +139,29 @@ export async function uploadFile(
 
   await FileSystem.copyAsync({ from: contentUri, to: localUri })
 
-  const formData = new FormData()
-  formData.append('file', {
-    uri: localUri,
-    name: filename,
-    type: 'application/octet-stream',
-  } as any)
+  try {
+    // Reject oversized files before burning a slow mobile upload —
+    // the backend hard-caps at 50 MB anyway.
+    const info = await FileSystem.getInfoAsync(localUri, { size: true })
+    if (info.exists && (info.size ?? 0) > MAX_UPLOAD_BYTES) {
+      throw new FileTooLargeError()
+    }
 
-  const res = await client.post<{ job_id: string }>('/upload', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
+    const formData = new FormData()
+    formData.append('file', {
+      uri: localUri,
+      name: filename,
+      type: 'application/octet-stream',
+    } as any)
 
-  await FileSystem.deleteAsync(localUri, { idempotent: true })
+    const res = await client.post<{ job_id: string }>('/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
 
-  return res.data.job_id
+    return res.data.job_id
+  } finally {
+    await FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => {})
+  }
 }
 
 export async function submitUrl(url: string): Promise<string> {
@@ -167,9 +199,22 @@ export async function openFileNatively(
 
 function guessMime(uri: string): string {
   const lower = uri.toLowerCase()
-  if (lower.endsWith('.pdf')) return 'application/pdf'
-  if (lower.endsWith('.apk')) return 'application/vnd.android.package-archive'
-  if (lower.endsWith('.zip')) return 'application/zip'
+  if (lower.endsWith('.pdf'))  return 'application/pdf'
+  if (lower.endsWith('.apk'))  return 'application/vnd.android.package-archive'
+  if (lower.endsWith('.zip'))  return 'application/zip'
   if (lower.endsWith('.exe') || lower.endsWith('.dll')) return 'application/x-msdownload'
+  if (lower.endsWith('.doc'))  return 'application/msword'
+  if (lower.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  if (lower.endsWith('.xls'))  return 'application/vnd.ms-excel'
+  if (lower.endsWith('.xlsx')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  if (lower.endsWith('.ppt'))  return 'application/vnd.ms-powerpoint'
+  if (lower.endsWith('.pptx')) return 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  if (lower.endsWith('.rtf'))  return 'application/rtf'
+  if (lower.endsWith('.txt'))  return 'text/plain'
+  if (lower.endsWith('.rar'))  return 'application/x-rar-compressed'
+  if (lower.endsWith('.7z'))   return 'application/x-7z-compressed'
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.png'))  return 'image/png'
+  if (lower.endsWith('.mp4'))  return 'video/mp4'
   return 'application/octet-stream'
 }

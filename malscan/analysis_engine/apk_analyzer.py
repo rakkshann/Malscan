@@ -9,7 +9,17 @@ Parses Android APK files to extract security-relevant metadata:
 import zipfile
 import re
 import logging
-from xml.etree import ElementTree
+
+# Prefer defusedxml to neutralise XML entity-expansion ("billion laughs") and
+# external-entity attacks in an attacker-supplied AndroidManifest.xml. Fall back
+# to stdlib ElementTree with a manual DTD/entity guard if defusedxml isn't
+# installed, so a missing optional dependency never silently disables parsing.
+try:
+    from defusedxml.ElementTree import fromstring as _xml_fromstring
+    _DEFUSED_XML = True
+except ImportError:  # pragma: no cover - defusedxml is a declared dependency
+    from xml.etree.ElementTree import fromstring as _xml_fromstring
+    _DEFUSED_XML = False
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +54,12 @@ def _parse_manifest_xml(raw_bytes: bytes) -> dict:
     Binary AXML will fail gracefully and return empty data."""
     info = {"package": None, "app_label": None, "permissions": [], "dangerous_permissions": []}
     try:
-        tree = ElementTree.fromstring(raw_bytes)
+        # Defense-in-depth when defusedxml is unavailable: refuse any document
+        # that declares a DTD or entities — that's the entity-expansion DoS vector.
+        if not _DEFUSED_XML and re.search(rb"<!DOCTYPE|<!ENTITY", raw_bytes, re.IGNORECASE):
+            logger.warning("APK manifest declares a DTD/entities — skipping XML parse (possible entity-expansion attack)")
+            return info
+        tree = _xml_fromstring(raw_bytes)
         info["package"] = tree.attrib.get("package")
 
         for uses in tree.iter("uses-permission"):
@@ -62,15 +77,30 @@ def _parse_manifest_xml(raw_bytes: bytes) -> dict:
     return info
 
 
+# Decompression budget for DEX scanning — a 50 MB APK can claim to inflate to
+# gigabytes (zip bomb); never read more than this in total.
+MAX_DEX_BYTES = 100 * 1024 * 1024
+
+# Real AndroidManifest.xml files are tiny (well under 1 MB). Cap the read so a
+# malicious APK can't claim a multi-GB manifest and exhaust memory on read.
+MAX_MANIFEST_BYTES = 5 * 1024 * 1024
+
+
 def _scan_dex_strings(zf: zipfile.ZipFile) -> dict:
     """Extract URLs and IPs from all .dex files inside the APK."""
     urls, ips = set(), set()
     ip_re = re.compile(rb'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b')
     url_re = re.compile(rb'https?://[^\x00\s\'\"\<\>\]]{4,}')
 
+    budget = MAX_DEX_BYTES
     for name in zf.namelist():
         if name.endswith(".dex"):
             try:
+                declared = zf.getinfo(name).file_size
+                if declared > budget:
+                    logger.warning(f"Skipping oversized DEX entry {name} ({declared} bytes) — decompression budget exceeded")
+                    continue
+                budget -= declared
                 data = zf.read(name)
                 for m in url_re.findall(data):
                     urls.add(m.decode("utf-8", errors="ignore"))
@@ -109,10 +139,15 @@ def analyze_apk(file_path: str) -> dict:
 
             result["is_apk"] = True
 
-            # Parse manifest
-            manifest_bytes = zf.read("AndroidManifest.xml")
-            manifest_info = _parse_manifest_xml(manifest_bytes)
-            result.update(manifest_info)
+            # Parse manifest (size-capped: reject an over-large declared manifest
+            # before reading it into memory).
+            manifest_size = zf.getinfo("AndroidManifest.xml").file_size
+            if manifest_size > MAX_MANIFEST_BYTES:
+                logger.warning(f"Skipping oversized AndroidManifest.xml ({manifest_size} bytes) — exceeds {MAX_MANIFEST_BYTES} byte cap")
+            else:
+                manifest_bytes = zf.read("AndroidManifest.xml")
+                manifest_info = _parse_manifest_xml(manifest_bytes)
+                result.update(manifest_info)
 
             # Scan DEX for embedded IOCs
             dex_data = _scan_dex_strings(zf)

@@ -2,7 +2,7 @@
   "expo": {
     "name": "MalScan",
     "slug": "malscan-mobile",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "scheme": "malscan",
     "userInterfaceStyle": "dark",
@@ -23,7 +23,16 @@
             { "mimeType": "application/vnd.android.package-archive" },
             { "mimeType": "application/octet-stream" },
             { "mimeType": "application/x-msdownload" },
-            { "mimeType": "application/x-dex" }
+            { "mimeType": "application/x-dex" },
+            { "mimeType": "application/msword" },
+            { "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+            { "mimeType": "application/vnd.ms-excel" },
+            { "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+            { "mimeType": "application/vnd.ms-powerpoint" },
+            { "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation" },
+            { "mimeType": "application/rtf" },
+            { "mimeType": "application/x-rar-compressed" },
+            { "mimeType": "application/x-7z-compressed" }
           ],
           "category": ["BROWSABLE", "DEFAULT"]
         },
@@ -52,7 +61,8 @@
           "android": {
             "compileSdkVersion": 36,
             "targetSdkVersion": 36,
-            "minSdkVersion": 24
+            "minSdkVersion": 24,
+            "usesCleartextTraffic": true
           }
         }
       ]

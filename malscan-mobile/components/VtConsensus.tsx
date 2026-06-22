@@ -17,8 +17,18 @@ export function VtConsensus({ stats }: { stats: VtStats }) {
     { count: undetected, color: colors.vt.undetected, label: 'Undetected' },
   ]
 
+  // Plain-language takeaway. Note: for files, engines never vote "harmless" —
+  // "undetected" IS the clean result, which confuses people without this line.
+  const headline =
+    malicious > 0  ? { text: `${malicious} of ${total} engines flagged this as malicious`, color: colors.vt.malicious }
+    : suspicious > 0 ? { text: `${suspicious} of ${total} engines marked this suspicious`, color: colors.vt.suspicious }
+    : { text: `Clean — 0 of ${total} engines flagged this`, color: colors.vt.harmless }
+
   return (
     <View style={{ gap: 12 }}>
+      <Text style={{ fontFamily: fonts.heading, fontSize: 14, fontWeight: '600', color: headline.color }}>
+        {headline.text}
+      </Text>
       <View style={{ flexDirection: 'row', height: 8, borderRadius: 4, overflow: 'hidden', backgroundColor: colors.border }}>
         {segments.map(s => s.count > 0 ? (
           <View key={s.label} style={{ flex: s.count / total, backgroundColor: s.color }} />
@@ -33,6 +43,11 @@ export function VtConsensus({ stats }: { stats: VtStats }) {
           </View>
         ))}
       </View>
+      {undetected > 0 && malicious === 0 && suspicious === 0 && (
+        <Text style={{ fontFamily: fonts.body, fontSize: 11, color: colors.text.muted }}>
+          "Undetected" means the engine scanned this and found nothing — it is the normal clean result for files.
+        </Text>
+      )}
     </View>
   )
 }

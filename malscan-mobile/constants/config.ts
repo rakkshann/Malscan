@@ -8,7 +8,7 @@
 // Android Emulator → use 'http://10.0.2.2:8000' (emulator loopback)
 // Physical device → use 'http://192.168.x.x:8000' (your machine's LAN IP)
 // ─────────────────────────────────────────────────────────────────────────────
-export const API_BASE_URL = 'http://192.168.0.102:8000'
+export const API_BASE_URL = 'http://192.168.0.101:8000'
 
 export const POLL_INTERVAL_MS = 2000
 export const UPLOAD_TIMEOUT_MS = 60_000

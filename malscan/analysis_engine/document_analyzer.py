@@ -12,10 +12,13 @@ No external dependencies — uses only stdlib (zipfile, re, struct).
 import os
 import re
 import zipfile
-import struct
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Decompression budget for OOXML member scanning — a ≤50 MB Office file can claim
+# to inflate to gigabytes (zip bomb); never read more than this in total.
+MAX_OOXML_DECOMPRESSED_BYTES = 200 * 1024 * 1024
 
 # ── PDF suspicious markers ────────────────────────────────────────────────────
 
@@ -100,6 +103,7 @@ def analyze_pdf(file_path: str) -> dict:
         "has_auto_action": False,
         "has_launch_action": False,
         "has_embedded_files": False,
+        "has_js_auto_combo": False,
         "suspicious_flags": [],
         "extracted_urls": [],
         "page_count": None,
@@ -131,6 +135,16 @@ def analyze_pdf(file_path: str) -> dict:
                     result["has_launch_action"] = True
                 if b"EmbeddedFile" in pattern:
                     result["has_embedded_files"] = True
+
+        # JavaScript bound DIRECTLY to an open/auto trigger (e.g.
+        # "/OpenAction << /S /JavaScript ... >>") — the classic drive-by PDF
+        # pattern. Mere co-existence of /JS and /OpenAction in the same file is
+        # NOT flagged here; that combination is normal for interactive forms.
+        if re.search(rb"/(OpenAction|AA)\b[^>]{0,400}?/(JS|JavaScript)\b", content, re.IGNORECASE | re.DOTALL):
+            result["has_js_auto_combo"] = True
+            result["suspicious_flags"].append(
+                "JavaScript wired to execute automatically on document open"
+            )
 
         result["extracted_urls"] = _extract_pdf_urls(content)
 
@@ -171,6 +185,7 @@ def analyze_office_ooxml(file_path: str) -> dict:
             # Scan all XML content for suspicious patterns
             urls = set()
             found_keywords = set()
+            budget = MAX_OOXML_DECOMPRESSED_BYTES
             for member_name in zf.namelist():
                 lower = member_name.lower()
                 if not (lower.endswith(".xml") or lower.endswith(".rels") or lower.endswith(".bin")):
@@ -179,6 +194,12 @@ def analyze_office_ooxml(file_path: str) -> dict:
                     continue
                 result["is_ooxml"] = True
                 try:
+                    # Zip-bomb guard: never read more than the remaining budget.
+                    declared = zf.getinfo(member_name).file_size
+                    if declared > budget:
+                        logger.warning(f"OOXML member {member_name} ({declared} bytes) exceeds remaining decompression budget — skipping")
+                        continue
+                    budget -= declared
                     data = zf.read(member_name)
                     for pattern, description in OOXML_SUSPICIOUS_XML:
                         if pattern in data:

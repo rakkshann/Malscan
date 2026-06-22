@@ -252,7 +252,9 @@ def generate_report(job_id: str, score_data: dict, raw_data: dict) -> str:
 
     os.makedirs(REPORTS_DIR, exist_ok=True)
 
-    template = Template(REPORT_TEMPLATE)
+    # autoescape is mandatory: filenames, URLs, page titles etc. come straight
+    # out of hostile files — without it the report is a stored-XSS vector.
+    template = Template(REPORT_TEMPLATE, autoescape=True)
     html = template.render(
         job_id=job_id,
         score_data=score_data,

@@ -2,14 +2,20 @@
 analysis_engine/threatfox_client.py
 
 ThreatFox (abuse.ch) — IOC lookup for URLs, domains, IPs, and hashes.
-No API key required. Free, public.
+Uses the free abuse.ch Auth-Key (ABUSECH_AUTH_KEY in backend/.env) when set.
 https://threatfox.abuse.ch/api/
 """
 
+import os
 import requests
 
 _API = "https://threatfox-api.abuse.ch/api/v1/"
 _TIMEOUT = 10
+
+
+def _auth_headers() -> dict:
+    key = os.environ.get("ABUSECH_AUTH_KEY", "").strip()
+    return {"Auth-Key": key} if key else {}
 
 
 def _search(ioc: str) -> dict:
@@ -17,6 +23,7 @@ def _search(ioc: str) -> dict:
         resp = requests.post(
             _API,
             json={"query": "search_ioc", "search_term": ioc},
+            headers=_auth_headers(),
             timeout=_TIMEOUT,
         )
         resp.raise_for_status()

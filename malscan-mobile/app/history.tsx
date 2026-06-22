@@ -1,9 +1,12 @@
 import { useCallback, useState } from 'react'
-import { Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { Alert, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router, useFocusEffect } from 'expo-router'
-import { clearHistory, getHistory, ScanSummary } from '../services/history'
+import { clearHistory, getHistory, removeFromHistory, ScanSummary } from '../services/history'
 import { useTheme } from '../contexts/ThemeContext'
+
+type Filter = 'All' | 'Threats' | 'Safe'
+const FILTERS: Filter[] = ['All', 'Threats', 'Safe']
 
 function VerdictBadge({ verdict, colors, fonts }: { verdict: ScanSummary['verdict']; colors: any; fonts: any }) {
   const color =
@@ -18,13 +21,14 @@ function VerdictBadge({ verdict, colors, fonts }: { verdict: ScanSummary['verdic
   )
 }
 
-function HistoryCard({ item, colors, fonts }: { item: ScanSummary; colors: any; fonts: any }) {
+function HistoryCard({ item, colors, fonts, onDelete }: { item: ScanSummary; colors: any; fonts: any; onDelete: (item: ScanSummary) => void }) {
   const date = new Date(item.scannedAt)
   const dateStr = date.toLocaleDateString() + '  ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   return (
     <TouchableOpacity
       style={{ backgroundColor: colors.surface, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: colors.border, gap: 10, elevation: 1 }}
       onPress={() => router.push({ pathname: '/verdict', params: { jobId: item.jobId } })}
+      onLongPress={() => onDelete(item)}
       activeOpacity={0.75}
     >
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
@@ -43,9 +47,17 @@ function HistoryCard({ item, colors, fonts }: { item: ScanSummary; colors: any; 
 export default function HistoryScreen() {
   const { colors, fonts } = useTheme()
   const [history, setHistory] = useState<ScanSummary[]>([])
+  const [filter, setFilter] = useState<Filter>('All')
+  const [refreshing, setRefreshing] = useState(false)
   const s = makeStyles(colors, fonts)
 
   useFocusEffect(useCallback(() => { getHistory().then(setHistory) }, []))
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true)
+    setHistory(await getHistory())
+    setRefreshing(false)
+  }, [])
 
   const handleClear = () => {
     Alert.alert('Clear History', 'Remove all past scan records?', [
@@ -53,6 +65,21 @@ export default function HistoryScreen() {
       { text: 'Clear All', style: 'destructive', onPress: () => clearHistory().then(() => setHistory([])) },
     ])
   }
+
+  const handleDeleteEntry = (item: ScanSummary) => {
+    Alert.alert('Remove Entry', `Remove "${item.target}" from your scan history?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: async () => {
+        await removeFromHistory(item.jobId)
+        setHistory(h => h.filter(e => e.jobId !== item.jobId))
+      }},
+    ])
+  }
+
+  const filtered =
+    filter === 'Threats' ? history.filter(h => h.verdict !== 'Clear')
+    : filter === 'Safe'  ? history.filter(h => h.verdict === 'Clear')
+    : history
 
   return (
     <SafeAreaView style={s.safe}>
@@ -66,19 +93,51 @@ export default function HistoryScreen() {
         </TouchableOpacity>
       </View>
 
+      {history.length > 0 && (
+        <View style={s.filterRow}>
+          {FILTERS.map(f => (
+            <TouchableOpacity
+              key={f}
+              style={[s.filterChip, filter === f && s.filterChipActive]}
+              onPress={() => setFilter(f)}
+              activeOpacity={0.75}
+            >
+              <Text style={[s.filterText, filter === f && s.filterTextActive]}>{f}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
       {history.length === 0 ? (
         <View style={s.empty}>
           <Text style={s.emptyGlyph}>🕐</Text>
           <Text style={s.emptyTitle}>No scans yet</Text>
           <Text style={s.emptySub}>Your scan history will appear here.</Text>
         </View>
+      ) : filtered.length === 0 ? (
+        <View style={s.empty}>
+          <Text style={s.emptyTitle}>{filter === 'Threats' ? 'No threats found' : 'No safe scans yet'}</Text>
+          <Text style={s.emptySub}>Nothing matches this filter.</Text>
+        </View>
       ) : (
         <FlatList
-          data={history}
+          data={filtered}
           keyExtractor={i => i.jobId}
-          renderItem={({ item }) => <HistoryCard item={item} colors={colors} fonts={fonts} />}
+          renderItem={({ item }) => <HistoryCard item={item} colors={colors} fonts={fonts} onDelete={handleDeleteEntry} />}
           contentContainerStyle={{ padding: 20, gap: 10 }}
-          ListHeaderComponent={<Text style={s.count}>{history.length} scan{history.length !== 1 ? 's' : ''}</Text>}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              colors={[colors.accent]}
+              progressBackgroundColor={colors.surface}
+            />
+          }
+          ListHeaderComponent={
+            <Text style={s.count}>
+              {filtered.length} scan{filtered.length !== 1 ? 's' : ''} · long-press to remove
+            </Text>
+          }
         />
       )}
     </SafeAreaView>
@@ -92,6 +151,16 @@ const makeStyles = (colors: any, fonts: any) => StyleSheet.create({
   backBtnText: { fontFamily: fonts.body, fontSize: 13, color: colors.text.secondary },
   title: { fontFamily: fonts.heading, fontSize: 17, fontWeight: '700', color: colors.text.primary },
   clearText: { fontFamily: fonts.body, fontSize: 14, color: colors.verdicts.malicious },
+
+  filterRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 20, paddingTop: 14 },
+  filterChip: {
+    paddingHorizontal: 16, paddingVertical: 7, borderRadius: 18,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
+  },
+  filterChipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  filterText: { fontFamily: fonts.body, fontSize: 13, color: colors.text.secondary },
+  filterTextActive: { color: '#fff', fontWeight: '600' },
+
   count: { fontFamily: fonts.body, fontSize: 12, color: colors.text.muted, marginBottom: 10 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   emptyGlyph: { fontSize: 48 },

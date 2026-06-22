@@ -12,7 +12,6 @@ Static file analysis:
 import re
 import os
 import math
-import struct
 
 # ── Magic byte signatures (true file type detection) ─────────────────────────
 
@@ -102,18 +101,22 @@ def _file_entropy(data: bytes) -> float:
     return round(entropy, 3)
 
 
-def detect_file_type(file_path: str) -> dict:
+def detect_file_type(file_path: str, data: bytes = None) -> dict:
     """
     Reads the first 16 bytes and matches against known magic signatures.
     Returns declared type from filename extension and detected type from bytes.
+    Pass `data` to reuse already-read bytes instead of re-reading from disk.
     """
     result = {"magic_type": "Unknown", "extension": "", "type_mismatch": False}
     try:
         ext = os.path.splitext(file_path)[1].lower()
         result["extension"] = ext
 
-        with open(file_path, "rb") as f:
-            header = f.read(16)
+        if data is not None:
+            header = data[:16]
+        else:
+            with open(file_path, "rb") as f:
+                header = f.read(16)
 
         for magic, type_name in MAGIC_SIGNATURES:
             if header[:len(magic)] == magic:
@@ -135,21 +138,25 @@ def detect_file_type(file_path: str) -> dict:
     return result
 
 
-def extract_iocs(file_path: str) -> dict:
+def extract_iocs(file_path: str, data: bytes = None) -> dict:
     """
     Extracts IPs, URLs, and domains from raw file content.
+    Pass `data` to reuse already-read bytes instead of re-reading from disk.
     """
     iocs = {"ips": set(), "domains": set(), "urls": set()}
 
-    if not os.path.exists(file_path):
+    if data is None and not os.path.exists(file_path):
         return {k: list(v) for k, v in iocs.items()}
 
     ip_re  = re.compile(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b')
     url_re = re.compile(r'https?://[^\s\'"<>\]]+')
 
     try:
-        with open(file_path, "rb") as f:
-            content = f.read()
+        if data is not None:
+            content = data
+        else:
+            with open(file_path, "rb") as f:
+                content = f.read()
         text = content.decode("utf-8", errors="ignore")
 
         for ip in ip_re.findall(text):
@@ -162,18 +169,22 @@ def extract_iocs(file_path: str) -> dict:
     return {k: list(v) for k, v in iocs.items()}
 
 
-def analyze_suspicious_strings(file_path: str) -> dict:
+def analyze_suspicious_strings(file_path: str, data: bytes = None) -> dict:
     """
     Scans file bytes for suspicious API calls, persistence mechanisms,
     credential theft patterns, and encoded payloads.
+    Pass `data` to reuse already-read bytes instead of re-reading from disk.
     """
     result = {"suspicious_strings": [], "matched_patterns": []}
-    if not os.path.exists(file_path):
+    if data is None and not os.path.exists(file_path):
         return result
 
     try:
-        with open(file_path, "rb") as f:
-            content = f.read()
+        if data is not None:
+            content = data
+        else:
+            with open(file_path, "rb") as f:
+                content = f.read()
 
         seen = set()
         for pattern, description in SUSPICIOUS_PATTERNS:
@@ -187,9 +198,11 @@ def analyze_suspicious_strings(file_path: str) -> dict:
     return result
 
 
-def analyze_pe(file_path: str) -> dict:
+def analyze_pe(file_path: str, data: bytes = None) -> dict:
     """
     Analyses Windows Executable (PE) metadata and anomalies.
+    Pass `data` to reuse already-read bytes for entropy/type detection
+    (pefile still parses from the path).
     """
     results = {
         "is_pe":               False,
@@ -200,18 +213,20 @@ def analyze_pe(file_path: str) -> dict:
         "type_mismatch":       False,
     }
 
-    if not os.path.exists(file_path):
+    if data is None and not os.path.exists(file_path):
         return results
 
     # File entropy and type detection apply to ALL files, not just PE
+    raw = data
     try:
-        with open(file_path, "rb") as f:
-            raw = f.read()
+        if raw is None:
+            with open(file_path, "rb") as f:
+                raw = f.read()
         results["file_entropy"] = _file_entropy(raw)
     except Exception:
-        pass
+        raw = None
 
-    type_info = detect_file_type(file_path)
+    type_info = detect_file_type(file_path, data=raw)
     results["magic_type"]    = type_info.get("magic_type", "Unknown")
     results["type_mismatch"] = type_info.get("type_mismatch", False)
 

@@ -12,21 +12,26 @@ Changes made by Team Member 4:
   - Store original_filename in job for the report
 """
 
-import hashlib, os, uuid, sys, time, zipfile, tempfile, shutil
+import hashlib, os, re, uuid, sys, time, zipfile, tempfile, shutil
 import asyncio
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 
 # ── Safety limits ─────────────────────────────────────────────────────────────
 MAX_UPLOAD_BYTES      = 50  * 1024 * 1024   # 50 MB hard cap
 MAX_DECOMPRESSED_BYTES = 200 * 1024 * 1024  # 200 MB total decompressed
 MAX_ZIP_FILE_COUNT    = 500                  # files inside a ZIP
+MAX_URL_LENGTH        = 2048                 # /submit-url input cap
+RATE_LIMIT_MAX        = 30                   # submissions per window per client IP
+RATE_LIMIT_WINDOW_S   = 60
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, UploadFile, File, HTTPException, Body
+from fastapi import BackgroundTasks, FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from fastapi.responses import HTMLResponse
 from .database import SessionLocal, init_db
 from .models import ScanJob
+from .security import sanitize_filename, cleanup_vault
 
 # Load .env from backend directory
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
@@ -54,18 +59,52 @@ try:
 except ImportError as e:
     print(f"Warning: Module import failed: {e}")
 
+from .indicator_index import lookup_prior_jobs, index_job_indicators, backfill_indicator_index
+
 app = FastAPI()
+
+# CORS: default to local dev origins; override with a comma-separated
+# MALSCAN_ALLOWED_ORIGINS env var in production (e.g. "https://malscan.example").
+# Safe to keep strict — the web frontend reaches the API same-origin through the
+# Next.js /api rewrite, and the mobile app is a native client (not subject to
+# CORS). Set MALSCAN_ALLOWED_ORIGINS="*" to explicitly opt back into wildcard.
+_allowed_origins_env = os.environ.get("MALSCAN_ALLOWED_ORIGINS", "").strip()
+if _allowed_origins_env == "*":
+    _allowed_origins = ["*"]
+elif _allowed_origins_env:
+    _allowed_origins = [o.strip() for o in _allowed_origins_env.split(",") if o.strip()]
+else:
+    _allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
-VAULT_DIR = "app/vault"
+# Overridable so tests (and future cloud deploys) can isolate their artifacts.
+VAULT_DIR = os.environ.get("MALSCAN_VAULT_DIR", "app/vault")
 os.makedirs(VAULT_DIR, exist_ok=True)
+cleanup_vault(VAULT_DIR, days_old=30)
+
+# ── Rate limiting (in-memory, per client IP) ──────────────────────────────────
+_submission_log: dict = defaultdict(deque)
+
+def _enforce_rate_limit(request: Request) -> None:
+    """Sliding-window limiter for submission endpoints. Raises 429 when exceeded."""
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    log = _submission_log[client_ip]
+    while log and now - log[0] > RATE_LIMIT_WINDOW_S:
+        log.popleft()
+    if len(log) >= RATE_LIMIT_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many submissions — limit is {RATE_LIMIT_MAX} per minute. Please wait and try again.",
+        )
+    log.append(now)
 
 # ── URL Allowlist — skip these safe domains for URLScan / analysis ────────────
 SAFE_DOMAIN_PATTERNS = {
@@ -95,8 +134,16 @@ def _pick_best_url(urls: list) -> str | None:
             return url
     return None
 
-_osint_executor = ThreadPoolExecutor(max_workers=6, thread_name_prefix="osint")
+_osint_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="osint")
 init_db()
+
+# One-time backfill of the indicator index from existing completed jobs
+# (idempotent — no-op once populated, and a no-op on a fresh/test DB).
+_bf_db = SessionLocal()
+try:
+    backfill_indicator_index(_bf_db)
+finally:
+    _bf_db.close()
 
 
 def process_scan_job(job_id: str, file_path: str, original_filename: str = "unknown", submitted_url: str = None):
@@ -111,8 +158,15 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
         db.commit()
 
         # ── 1. Static Analysis ───────────────────────────────────────────────
-        iocs    = extract_iocs(file_path)
-        pe_info = analyze_pe(file_path)
+        # Read the artifact once and reuse the bytes across analyzers, instead of
+        # re-reading a (up to 50 MB) file from disk for each pass.
+        try:
+            with open(file_path, "rb") as f:
+                raw_bytes = f.read()
+        except Exception:
+            raw_bytes = None
+        iocs    = extract_iocs(file_path, data=raw_bytes)
+        pe_info = analyze_pe(file_path, data=raw_bytes)
         apk_info = {}
         archive_contents = []
 
@@ -139,8 +193,16 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
                             break
 
                         # ── Zip Slip protection ───────────────────────────────
+                        # commonpath avoids the prefix-sibling bug of a bare
+                        # startswith (e.g. "/x/dir" vs "/x/dir_evil") and an
+                        # absolute/other-drive member path (ValueError → outside).
+                        real_extract_dir = os.path.realpath(extract_dir)
                         member_path = os.path.realpath(os.path.join(extract_dir, member.filename))
-                        if not member_path.startswith(os.path.realpath(extract_dir)):
+                        try:
+                            inside = os.path.commonpath([real_extract_dir, member_path]) == real_extract_dir
+                        except ValueError:
+                            inside = False
+                        if not inside:
                             print(f"Zip Slip blocked: {member.filename}")
                             continue
                         if member.is_dir():
@@ -184,7 +246,7 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
         doc_info = analyze_document(file_path, original_filename)
 
         # ── 1e. Suspicious string patterns ───────────────────────────────────
-        string_info = analyze_suspicious_strings(file_path)
+        string_info = analyze_suspicious_strings(file_path, data=raw_bytes)
         pe_info["suspicious_strings"] = string_info.get("suspicious_strings", [])
 
         # ── 1f. YARA scan ────────────────────────────────────────────────────
@@ -337,14 +399,13 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
         # ── 4. Attribution Scoring ───────────────────────────────────────────
         score_data = calculate_score(analysis_data)
 
-        # ── 5. Infrastructure Clustering (cross-job) ─────────────────────────
-        all_completed_jobs = (
-            db.query(ScanJob)
-              .filter(ScanJob.status == "Completed")
-              .all()
-        )
-        cluster_result = cluster_iocs(job_id, score_data, all_completed_jobs)
+        # ── 5. Infrastructure Clustering (cross-job, via inverted index) ─────
+        # Look up only PRIOR jobs sharing this job's indicators (O(k·log n)),
+        # then record this job's indicators for future scans to match against.
+        prior_lookup = lookup_prior_jobs(db, job_id, score_data)
+        cluster_result = cluster_iocs(job_id, score_data, prior_lookup)
         score_data["clusters"] = cluster_result
+        index_job_indicators(db, job_id, score_data)
 
         # ── 6. Report Generation ─────────────────────────────────────────────
         raw_meta = {
@@ -355,9 +416,6 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
             "suspicious_sections": pe_info.get("suspicious_sections", []),
         }
         generate_report(job_id, score_data, raw_meta)
-
-        # ── 7. Simulate processing delay for UI realism ──────────────────────
-        time.sleep(3)
 
         # Merge file metadata into results so frontend can display them
         score_data["file_hash"] = job.file_hash
@@ -386,7 +444,8 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
 # ── Upload ────────────────────────────────────────────────────────────────────
 
 @app.post("/upload")
-async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_file(request: Request, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    _enforce_rate_limit(request)
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail=f"File exceeds maximum allowed size of {MAX_UPLOAD_BYTES // 1024 // 1024} MB.")
@@ -403,7 +462,8 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     db.commit()
     db.close()
 
-    background_tasks.add_task(process_scan_job, job_id, file_path, file.filename or "unknown")
+    safe_name = sanitize_filename(file.filename) if file.filename else "unknown"
+    background_tasks.add_task(process_scan_job, job_id, file_path, safe_name)
 
     return {"job_id": job_id, "status": "Submitted"}
 
@@ -413,12 +473,24 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 class UrlSubmission(BaseModel):
     url: str
 
+# Bare hostname like "example.com" (no scheme, no path) — RFC 1035-ish labels.
+_DOMAIN_RE = re.compile(
+    r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+)
+
 @app.post("/submit-url")
-async def submit_url(background_tasks: BackgroundTasks, body: UrlSubmission):
+async def submit_url(request: Request, background_tasks: BackgroundTasks, body: UrlSubmission):
     """Accepts a raw URL string, saves it as a vault artifact, and runs the full analysis pipeline."""
+    _enforce_rate_limit(request)
     url = body.url.strip()
     if not url:
         raise HTTPException(status_code=400, detail="URL cannot be empty")
+    if len(url) > MAX_URL_LENGTH:
+        raise HTTPException(status_code=400, detail=f"URL exceeds maximum length of {MAX_URL_LENGTH} characters.")
+    # Accept a full http(s) URL or a bare domain (the pipeline handles both);
+    # reject other schemes (file://, javascript:, ...) and arbitrary text.
+    if not (url.startswith("http://") or url.startswith("https://") or _DOMAIN_RE.match(url)):
+        raise HTTPException(status_code=400, detail="Submit a full http:// or https:// URL, or a plain domain name.")
 
     content = url.encode("utf-8")
     file_hash = hashlib.sha256(content).hexdigest()
@@ -478,7 +550,15 @@ async def get_report_html(job_id: str):
     with open(report_path, "r", encoding="utf-8") as f:
         html = f.read()
 
-    return HTMLResponse(content=html)
+    # Defense-in-depth: the report renders strings extracted from hostile files.
+    # Template autoescaping is the primary control; CSP blocks anything that slips through.
+    return HTMLResponse(
+        content=html,
+        headers={
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 # ── JSON Report (for frontend graph) ─────────────────────────────────────────
