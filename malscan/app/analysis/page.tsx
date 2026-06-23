@@ -1,8 +1,9 @@
 "use client"
 
-import { useState, useEffect, use } from "react"
-import { useRouter } from "next/navigation"
+import { useState, useEffect, Suspense } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { motion } from "framer-motion"
+import { apiUrl } from "../../lib/config"
 
 // --- BACKGROUND PLACEHOLDER ---
 const BackgroundMedia = () => (
@@ -57,10 +58,13 @@ function generateLogMessages(progress: number): { time: string; msg: string; isA
     })
 }
 
-export default function AnalysisPage({ params }: { params: Promise<{ id: string }> }) {
+function AnalysisContent() {
   const router = useRouter()
-  const resolvedParams = use(params)
-  
+  const searchParams = useSearchParams()
+  const id = searchParams.get("id") || "job-demo-8x9921"
+  // Present only when this scan came from the default-browser link interceptor.
+  const target = searchParams.get("target")
+
   const [progress, setProgress] = useState(0)
   const [realStatus, setRealStatus] = useState("SUBMITTED")
   const steps = [
@@ -89,14 +93,14 @@ export default function AnalysisPage({ params }: { params: Promise<{ id: string 
       })
     }, 50)
 
-    if (resolvedParams.id.includes('demo')) {
+    if (id.includes('demo')) {
        targetProgress = 100;
        return () => clearInterval(visualInterval)
     }
 
     const pollInterval = setInterval(async () => {
         try {
-            const res = await fetch(`/api/status/${resolvedParams.id}`)
+            const res = await fetch(apiUrl(`/api/status/${id}`))
             if (res.ok) {
                 const data = await res.json()
                 if (data.status === 'Completed' || data.status === 'Failed') {
@@ -119,14 +123,14 @@ export default function AnalysisPage({ params }: { params: Promise<{ id: string 
         clearInterval(visualInterval)
         clearInterval(pollInterval)
     }
-  }, [resolvedParams.id])
+  }, [id])
 
   // Watch progress for navigation
   useEffect(() => {
     if (progress === 100) {
-      router.push(`/report/${resolvedParams.id}`)
+      router.push(target ? `/report?id=${id}&target=${encodeURIComponent(target)}` : `/report?id=${id}`)
     }
-  }, [progress, router, resolvedParams.id])
+  }, [progress, router, id, target])
 
   // Update current step text based on progress
   useEffect(() => {
@@ -176,7 +180,7 @@ export default function AnalysisPage({ params }: { params: Promise<{ id: string 
             <div className="flex justify-between items-end mb-8">
                 <div>
                   <h2 className="text-xs font-bold tracking-widest text-[#666]">JOB ID</h2>
-                  <p className="text-2xl text-[#FF3B00]">{resolvedParams.id.toUpperCase()}</p>
+                  <p className="text-2xl text-[#FF3B00]">{id.toUpperCase()}</p>
                 </div>
                 <div className="text-right"><h2 className="text-xs font-bold tracking-widest text-[#666]">STATUS</h2><p className="text-lg animate-pulse">{realStatus}</p></div>
             </div>
@@ -212,5 +216,13 @@ export default function AnalysisPage({ params }: { params: Promise<{ id: string 
           </div>
       </div>
     </div>
+  )
+}
+
+export default function AnalysisPage() {
+  return (
+    <Suspense fallback={null}>
+      <AnalysisContent />
+    </Suspense>
   )
 }

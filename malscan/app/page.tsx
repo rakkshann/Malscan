@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { motion, useScroll, useTransform } from "framer-motion"
 import { UploadCloud, ArrowRight, Cpu, Network, Shield, Zap } from "lucide-react"
+import { submitFileForScan, submitUrlForScan } from "../lib/scan"
 
 // --- BACKGROUND PLACEHOLDER ---
 const BackgroundMedia = () => (
@@ -65,20 +66,12 @@ export default function LandingPage() {
     if (!file) return;
 
     setIsUploading(true)
-    const formData = new FormData()
-    formData.append("file", file)
-
     try {
-      const res = await fetch("/api/upload", {
-          method: "POST",
-          body: formData
-      })
-      if (!res.ok) throw new Error("Backend offline or error")
-      const data = await res.json()
-      router.push(`/analysis/${data.job_id}`)
+      const jobId = await submitFileForScan(file, file.name)
+      router.push(`/analysis?id=${jobId}`)
     } catch (err) {
       console.error(err)
-      router.push(`/analysis/job-demo-8x9921`)
+      router.push(`/analysis?id=job-demo-8x9921`)
     }
     setIsUploading(false)
   }
@@ -89,14 +82,8 @@ export default function LandingPage() {
     setUrlError(null)
     setIsSubmittingUrl(true)
     try {
-      const res = await fetch("/api/submit-url", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: trimmed }),
-      })
-      if (!res.ok) throw new Error("Backend error")
-      const data = await res.json()
-      router.push(`/analysis/${data.job_id}`)
+      const jobId = await submitUrlForScan(trimmed)
+      router.push(`/analysis?id=${jobId}`)
     } catch (err) {
       console.error(err)
       setUrlError("Submission failed. Is the backend running?")
@@ -114,8 +101,9 @@ export default function LandingPage() {
             <div className="w-3 h-3 bg-[#FF3B00]"></div>
             <span className="font-bold">MalScan Pro // V.2.4</span>
         </div>
-        <div className="flex gap-6">
+        <div className="flex gap-6 items-center">
             <span>LATENCY: {latency !== null ? `${latency}ms` : 'CALC...'}</span>
+            <button onClick={() => router.push('/settings')} className="hover:text-[#FF3B00] transition-colors">SETTINGS</button>
         </div>
       </nav>
       

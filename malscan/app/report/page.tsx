@@ -1,10 +1,11 @@
 "use client"
 
-import { use, useState, useEffect, useRef } from "react"
-import { useRouter } from "next/navigation"
+import { useState, useEffect, useRef, Suspense } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { motion } from "framer-motion"
 import { ShieldAlert, Download, Share2, Globe, FileCode, Cpu, Hash, TerminalSquare, Camera, ExternalLink, Home, Info, Check, Network, Shield, Package, Archive, Smartphone, MapPin } from "lucide-react"
 import dynamic from "next/dynamic"
+import { apiUrl } from "../../lib/config"
 
 const GeoMap = dynamic(() => import("./GeoMap"), { ssr: false, loading: () => <div className="w-full h-[420px] bg-[#0d1117] flex items-center justify-center font-mono text-xs text-gray-600">LOADING MAP...</div> })
 
@@ -148,8 +149,12 @@ const GraphWidget = ({ nodes, edges, threatScore }: { nodes: any[]; edges: any[]
 }
 
 // --- MAIN PAGE COMPONENT ---
-export default function ReportPage({ params }: { params: Promise<{ id: string }> }) {
-    const resolvedParams = use(params)
+function ReportContent() {
+    const searchParams = useSearchParams()
+    const id = searchParams.get("id") || ""
+    // Present only when this scan came from the default-browser link interceptor
+    // (see hooks/useLinkIntent.ts) — the original URL we're deciding whether to open.
+    const interceptedUrl = searchParams.get("target")
     const router = useRouter()
 
     const [reportData, setReportData] = useState<any>(null)
@@ -159,7 +164,7 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
     useEffect(() => {
         const fetchReport = async () => {
             try {
-                const res = await fetch(`/api/status/${resolvedParams.id}`)
+                const res = await fetch(apiUrl(`/api/status/${id}`))
                 if (res.ok) {
                     const data = await res.json()
                     if (data.status === 'Failed') {
@@ -176,13 +181,25 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
             }
         }
         fetchReport()
-    }, [resolvedParams.id])
+    }, [id])
 
     // --- PDF Export (native print → Save as PDF) ---
     const handleExportPDF = () => {
-        document.title = `MalScan_Report_${resolvedParams.id.slice(0, 8)}`
+        document.title = `MalScan_Report_${id.slice(0, 8)}`
         window.print()
         setTimeout(() => { document.title = 'MalScan Report' }, 1000)
+    }
+
+    // --- Open a link MalScan intercepted as the default browser, now that it's
+    // verified Clear. Uses Chrome Custom Tabs on Android, falls back to a normal
+    // tab on the web. ---
+    const handleOpenInterceptedUrl = async (url: string) => {
+        try {
+            const { Browser } = await import("@capacitor/browser")
+            await Browser.open({ url })
+        } catch {
+            window.open(url, "_blank")
+        }
     }
 
     // --- Share Intel ---
@@ -254,7 +271,7 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
                     >
                         <Home size={13} /> HOME
                     </button>
-                    <span className="text-gray-400 uppercase tracking-wider">JOB ID: {resolvedParams.id}</span>
+                    <span className="text-gray-400 uppercase tracking-wider">JOB ID: {id}</span>
                     <span className={`px-3 py-1 font-bold rounded-sm uppercase tracking-widest ${verdict === 'Clear'
                             ? 'bg-green-900 text-green-400'
                             : verdict === 'Suspicious'
@@ -263,6 +280,20 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
                         }`}>{verdict}</span>
                 </div>
                 <div className="flex gap-4 relative">
+                    {interceptedUrl && (
+                        verdict === 'Clear' ? (
+                            <button
+                                onClick={() => handleOpenInterceptedUrl(interceptedUrl)}
+                                className="flex items-center gap-2 text-xs font-bold tracking-widest text-green-600 hover:text-green-700 transition-colors"
+                            >
+                                <ExternalLink size={14} /> OPEN LINK
+                            </button>
+                        ) : (
+                            <span className="flex items-center gap-2 text-xs font-bold tracking-widest text-[#FF3B00]">
+                                <ShieldAlert size={14} /> LINK BLOCKED
+                            </span>
+                        )
+                    )}
                     <button
                         onClick={handleExportPDF}
                         className="flex items-center gap-2 text-xs font-bold tracking-widest hover:text-[#FF3B00] transition-colors"
@@ -495,6 +526,14 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
                 </motion.div>
             </main>
         </div>
+    )
+}
+
+export default function ReportPage() {
+    return (
+        <Suspense fallback={null}>
+            <ReportContent />
+        </Suspense>
     )
 }
 
