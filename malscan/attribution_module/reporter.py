@@ -19,14 +19,14 @@ logger = logging.getLogger(__name__)
 REPORTS_DIR = os.path.join(os.path.dirname(__file__), "..", "reports")
 
 # ── HTML template ─────────────────────────────────────────────────────────────
-# Styled to match the frontend's dark/orange MalScan Pro aesthetic.
+# Styled to match the frontend's dark/orange MalScan aesthetic.
 
 REPORT_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>MalScan Pro — Report {{ job_id }}</title>
+<title>MalScan — Report {{ job_id }}</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -50,6 +50,11 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
   .logo-text { font-size: 13px; font-family: var(--mono); font-weight: bold;
                letter-spacing: 0.2em; text-transform: uppercase; }
   .job-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: right; }
+  .target-banner { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent);
+                    border-radius: 4px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; }
+  .target-banner .label { font-size: 10px; font-family: var(--mono); letter-spacing: 0.25em;
+                           text-transform: uppercase; color: var(--muted); margin-bottom: 0.4rem; }
+  .target-banner .value { font-family: var(--mono); font-size: 15px; font-weight: bold; color: var(--text); word-break: break-all; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem; }
   .card { background: var(--surface); border: 1px solid var(--border);
           border-radius: 4px; padding: 1.5rem; }
@@ -102,13 +107,25 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 <header>
   <div class="logo">
     <div class="logo-dot"></div>
-    <span class="logo-text">MalScan Pro // Forensic Report</span>
+    <span class="logo-text">MalScan // Forensic Report</span>
   </div>
   <div class="job-meta">
     <div>JOB ID: {{ job_id }}</div>
     <div>GENERATED: {{ generated_at }}</div>
   </div>
 </header>
+
+{% set indicators = score_data.indicators or {} %}
+{% set target = score_data.submitted_url
+    or score_data.original_filename
+    or (indicators.urls or [])|first
+    or (indicators.domains or [])|first
+    or (score_data.file_hash and ("File: " + score_data.file_hash))
+    or "Unknown Target" %}
+<div class="target-banner">
+  <div class="label">Target Analyzed</div>
+  <div class="value">{{ target }}</div>
+</div>
 
 <div class="grid">
 
@@ -176,7 +193,7 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
     <div class="card-title">Artifact Metadata</div>
     <table class="kv-table">
       <tr><td>SHA-256</td><td style="font-size:10px;">{{ raw_data.file_hash or "N/A" }}</td></tr>
-      <tr><td>Filename</td><td>{{ raw_data.original_filename or "N/A" }}</td></tr>
+      <tr><td>Filename</td><td>{{ score_data.original_filename or raw_data.original_filename or "N/A" }}</td></tr>
       <tr><td>Is PE</td><td>{{ raw_data.get("is_pe", "Unknown") }}</td></tr>
       <tr><td>Imphash</td><td style="font-size:10px;">{{ raw_data.get("imphash") or "N/A" }}</td></tr>
       {% if raw_data.get("suspicious_sections") %}
@@ -220,7 +237,7 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <footer>
-  <span>MalScan Pro — Forensic Attribution Engine v1.0</span>
+  <span>MalScan — Forensic Attribution Engine v1.0</span>
   <span>This report is for investigative purposes only. Not a substitute for professional threat analysis.</span>
 </footer>
 

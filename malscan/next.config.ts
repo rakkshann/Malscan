@@ -15,7 +15,8 @@ const nextConfig: NextConfig = isCapacitorBuild
         return [
           {
             source: "/api/:path*",
-            destination: "http://127.0.0.1:8000/:path*", // Proxy to FastAPI Backend
+            // Port 8000 is permanently occupied by Splunk on this machine — backend runs on 8001 instead.
+            destination: "http://127.0.0.1:8001/:path*", // Proxy to FastAPI Backend
           },
         ];
       },

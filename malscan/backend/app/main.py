@@ -16,6 +16,8 @@ import hashlib, os, re, uuid, sys, time, zipfile, tempfile, shutil
 import asyncio
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse
+import requests
 
 # ── Safety limits ─────────────────────────────────────────────────────────────
 MAX_UPLOAD_BYTES      = 50  * 1024 * 1024   # 50 MB hard cap
@@ -28,7 +30,7 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from .database import SessionLocal, init_db
 from .models import ScanJob
 from .security import sanitize_filename, cleanup_vault
@@ -419,6 +421,9 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
 
         # Merge file metadata into results so frontend can display them
         score_data["file_hash"] = job.file_hash
+        score_data["original_filename"] = original_filename
+        if submitted_url:
+            score_data["submitted_url"] = submitted_url
         score_data["imphash"]   = pe_info.get("imphash")
         if archive_contents:
             score_data["archive_contents"] = archive_contents
@@ -525,11 +530,33 @@ async def get_status(job_id: str):
         db.close()
 
 
+# ── Image proxy ──────────────────────────────────────────────────────────────
+# The frontend's PDF export screenshots the rendered report with html2canvas,
+# which can't read pixels from a cross-origin image (e.g. the URLScan
+# screenshot, hosted on urlscan.io) unless that server opts in with CORS
+# headers — urlscan.io doesn't. Proxying it through our own origin sidesteps
+# that: server-to-server fetches aren't subject to CORS at all. Locked to a
+# small allowlist of known screenshot hosts so this can't become an open
+# proxy for arbitrary URLs (SSRF).
+PROXY_ALLOWED_HOSTS = {"urlscan.io"}
+
+@app.get("/proxy/image")
+def proxy_image(url: str):
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname not in PROXY_ALLOWED_HOSTS:
+        raise HTTPException(status_code=400, detail="URL not allowed")
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException:
+        raise HTTPException(status_code=502, detail="Could not fetch image")
+    return Response(content=resp.content, media_type=resp.headers.get("content-type", "image/png"))
+
+
 # ── HTML Report ───────────────────────────────────────────────────────────────
 
-@app.get("/report/{job_id}", response_class=HTMLResponse)
-async def get_report_html(job_id: str):
-    """Serves the full HTML forensic report for a completed job."""
+def _load_report_html(job_id: str) -> str:
+    """Shared by the HTML and PDF report endpoints below."""
     db = SessionLocal()
     try:
         job = db.query(ScanJob).filter(ScanJob.job_id == job_id).first()
@@ -548,8 +575,13 @@ async def get_report_html(job_id: str):
         generate_report(job_id, job.results, raw_meta)
 
     with open(report_path, "r", encoding="utf-8") as f:
-        html = f.read()
+        return f.read()
 
+
+@app.get("/report/{job_id}", response_class=HTMLResponse)
+async def get_report_html(job_id: str):
+    """Serves the full HTML forensic report for a completed job."""
+    html = _load_report_html(job_id)
     # Defense-in-depth: the report renders strings extracted from hostile files.
     # Template autoescaping is the primary control; CSP blocks anything that slips through.
     return HTMLResponse(
@@ -558,6 +590,38 @@ async def get_report_html(job_id: str):
             "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
             "X-Content-Type-Options": "nosniff",
         },
+    )
+
+
+@app.get("/report/{job_id}/pdf")
+async def get_report_pdf(job_id: str):
+    """
+    Renders the same HTML report to a real PDF using headless Chromium
+    (Playwright) server-side. This is deliberately not done client-side: the
+    packaged app's Android WebView has no native print handler, and screenshot
+    -based approaches kept hitting cross-origin canvas restrictions. Driving a
+    real, full browser engine here sidesteps both — same engine that already
+    prints correctly when a person does it manually from a real Chrome tab.
+    """
+    html = _load_report_html(job_id)
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        raise HTTPException(status_code=501, detail="PDF export requires the 'playwright' package (pip install playwright && playwright install chromium)")
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        try:
+            page = await browser.new_page()
+            await page.set_content(html, wait_until="networkidle")
+            pdf_bytes = await page.pdf(format="Letter", print_background=True, margin={"top": "0.4in", "bottom": "0.4in", "left": "0.4in", "right": "0.4in"})
+        finally:
+            await browser.close()
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="MalScan_Report_{job_id[:8]}.pdf"'},
     )
 
 

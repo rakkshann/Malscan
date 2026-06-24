@@ -15,58 +15,20 @@ const BackgroundMedia = () => (
   </div>
 )
 
-const TelemetryBlock = ({ label, value, color = "text-white" }: {label:string, value:string, color?:string}) => (
-    <div className="mb-6 font-mono">
-        <div className="text-[9px] text-gray-500 tracking-widest uppercase mb-1">{label}</div>
-        <div className={`text-lg ${color}`}>{value}</div>
-        <div className="w-full h-px bg-[#333] mt-2 relative overflow-hidden">
-            <div className="absolute inset-0 bg-[#FF3B00] w-1/2 animate-pulse opacity-50"></div>
-        </div>
-    </div>
-)
-
-// --- Dynamic log message generator ---
-function generateLogMessages(progress: number): { time: string; msg: string; isAlert: boolean }[] {
-    const now = new Date()
-    const fmt = (d: Date) => d.toTimeString().slice(0, 8)
-
-    const allLogs = [
-        { threshold: 0,  msg: "Spawning isolated microVM...", isAlert: false },
-        { threshold: 8,  msg: "Mounting artifact volume...", isAlert: false },
-        { threshold: 15, msg: "Injecting syscall hooks...", isAlert: false },
-        { threshold: 22, msg: "Computing SHA-256 / MD5 hashes...", isAlert: false },
-        { threshold: 30, msg: "PE header parsing started...", isAlert: false },
-        { threshold: 38, msg: "Extracting embedded strings...", isAlert: false },
-        { threshold: 42, msg: "Checking for obfuscation patterns...", isAlert: true },
-        { threshold: 50, msg: "Querying VirusTotal API (v3)...", isAlert: false },
-        { threshold: 55, msg: "URLScan.io sandbox submission...", isAlert: false },
-        { threshold: 60, msg: "YARA rule matching (v2024.01)...", isAlert: false },
-        { threshold: 65, msg: "API import table reconstruction...", isAlert: false },
-        { threshold: 72, msg: "Passive DNS cluster lookup...", isAlert: false },
-        { threshold: 78, msg: "WHOIS / GeoIP enrichment...", isAlert: false },
-        { threshold: 85, msg: "Scoring heuristics running...", isAlert: true },
-        { threshold: 92, msg: "Generating infrastructure graph...", isAlert: false },
-        { threshold: 97, msg: "Compiling final verdict...", isAlert: false },
-    ]
-
-    const visible = allLogs.filter(l => progress >= l.threshold)
-    // Show the last 5 log entries based on progress
-    const recent = visible.slice(-5)
-    return recent.map((l, i) => {
-        const t = new Date(now.getTime() - (recent.length - 1 - i) * 2000)
-        return { time: fmt(t), msg: l.msg, isAlert: l.isAlert }
-    })
-}
-
 function AnalysisContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const id = searchParams.get("id") || "job-demo-8x9921"
   // Present only when this scan came from the default-browser link interceptor.
   const target = searchParams.get("target")
+  // Present only when this scan came from a native file intent (share sheet
+  // or "Open with") — lets the report offer an "Open File" action.
+  const fileUri = searchParams.get("fileUri")
+  const mimeType = searchParams.get("mimeType")
 
   const [progress, setProgress] = useState(0)
   const [realStatus, setRealStatus] = useState("SUBMITTED")
+
   const steps = [
     "ALLOCATING_ISOLATED_SANDBOX", "MOUNTING_ARTIFACT_VOLUME", "CALCULATING_HASHES (SHA256/MD5)",
     "PE_HEADER_PARSING", "STRING_EXTRACTION & OBFUSCATION_CHECK", "YARA_RULE_MATCHING (v2024.01)",
@@ -74,22 +36,15 @@ function AnalysisContent() {
   ]
   const [currentStep, setCurrentStep] = useState(0)
 
-  // --- Dynamic telemetry state ---
-  const [cpuLoad, setCpuLoad] = useState(12)
-  const [memUsage, setMemUsage] = useState(0.3)
-  const [netUp, setNetUp] = useState(0)
-  const [netDown, setNetDown] = useState(0)
-  const [threads, setThreads] = useState(4)
-  const [logEntries, setLogEntries] = useState<{ time: string; msg: string; isAlert: boolean }[]>([])
-
   // Real Polling mixed with visual progression
   useEffect(() => {
     let targetProgress = 10;
+    let increment = 0.5; // Start with decent speed
     
     const visualInterval = setInterval(() => {
       setProgress(prev => {
-        if (prev >= targetProgress) return targetProgress
-        return prev + 0.8
+        if (prev >= targetProgress) return targetProgress;
+        return prev + increment;
       })
     }, 50)
 
@@ -106,12 +61,15 @@ function AnalysisContent() {
                 if (data.status === 'Completed' || data.status === 'Failed') {
                     setRealStatus(data.status === 'Failed' ? 'FAILED' : 'FINALIZING')
                     targetProgress = 100;
+                    increment = 2.0; // Fast finish once completed
                 } else if (data.status === 'Processing') {
                     setRealStatus('PROCESSING')
-                    targetProgress = 60;
+                    targetProgress = 95;
+                    increment = 0.15; // Slow crawl through processing to prevent freezing
                 } else if (data.status === 'Submitted') {
                     setRealStatus('QUEUED')
                     targetProgress = 20;
+                    increment = 0.5;
                 }
             }
         } catch (e) {
@@ -127,66 +85,54 @@ function AnalysisContent() {
 
   // Watch progress for navigation
   useEffect(() => {
-    if (progress === 100) {
-      router.push(target ? `/report?id=${id}&target=${encodeURIComponent(target)}` : `/report?id=${id}`)
+    if (progress >= 100) {
+      const params = new URLSearchParams({ id })
+      if (target) params.set("target", target)
+      if (fileUri) params.set("fileUri", fileUri)
+      if (mimeType) params.set("mimeType", mimeType)
+      router.push(`/report?${params.toString()}`)
     }
-  }, [progress, router, id, target])
+  }, [progress, router, id, target, fileUri, mimeType])
 
   // Update current step text based on progress
   useEffect(() => {
     setCurrentStep(Math.min(Math.floor((progress / 100) * steps.length), steps.length - 1))
   }, [progress, steps.length])
 
-  // --- Animate telemetry values based on progress ---
-  useEffect(() => {
-    if (progress >= 100) return // Stop when done
-
-    const telemetryInterval = setInterval(() => {
-      const jitter = () => (Math.random() - 0.5) * 2
-
-      // CPU ramps up from ~20% to ~95% as progress increases
-      const baseCpu = 20 + (progress / 100) * 65
-      setCpuLoad(Math.min(99, Math.max(10, Math.round(baseCpu + jitter() * 12))))
-
-      // Memory gradually increases from 0.3GB to ~2.1GB
-      const baseMem = 0.3 + (progress / 100) * 1.8
-      setMemUsage(parseFloat((baseMem + jitter() * 0.1).toFixed(1)))
-
-      // Network I/O — busier mid-scan
-      const midBoost = Math.sin((progress / 100) * Math.PI)
-      setNetUp(Math.max(1, Math.round(8 + midBoost * 40 + jitter() * 10)))
-      setNetDown(Math.max(5, Math.round(120 + midBoost * 600 + jitter() * 80)))
-
-      // Threads fluctuate
-      const baseThreads = 40 + (progress / 100) * 120
-      setThreads(Math.max(8, Math.round(baseThreads + jitter() * 20)))
-    }, 800)
-
-    return () => clearInterval(telemetryInterval)
-  }, [progress])
-
-  // --- Update engine log entries ---
-  useEffect(() => {
-    setLogEntries(generateLogMessages(progress))
-  }, [progress])
+  // Calculate ETA (assuming ~45 seconds total for a scan)
+  const etaSeconds = Math.max(0, Math.round(45 * (1 - progress / 100)));
+  const formatETA = (seconds: number) => {
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      return `${m}:${s.toString().padStart(2, '0')}`;
+  };
 
   return (
     <div className="h-screen bg-[#0A0A0A] text-white font-mono flex relative overflow-hidden">
       <BackgroundMedia />
       
       {/* MAIN CONTENT AREA */}
-      <div className="flex-1 flex flex-col justify-center items-center relative z-10 border-r border-[#222]">
+      <div className="flex-1 flex flex-col justify-center items-center relative z-10">
         <div className="w-full max-w-2xl px-6">
             <div className="flex justify-between items-end mb-8">
                 <div>
                   <h2 className="text-xs font-bold tracking-widest text-[#666]">JOB ID</h2>
                   <p className="text-2xl text-[#FF3B00]">{id.toUpperCase()}</p>
                 </div>
-                <div className="text-right"><h2 className="text-xs font-bold tracking-widest text-[#666]">STATUS</h2><p className="text-lg animate-pulse">{realStatus}</p></div>
+                <div className="text-right">
+                  <h2 className="text-xs font-bold tracking-widest text-[#666]">STATUS</h2>
+                  <p className="text-lg animate-pulse">{realStatus}</p>
+                </div>
+            </div>
+            
+            <div className="flex justify-between items-end mb-2">
+                <p className="text-sm text-[#888]">Estimated time remaining: <span className="text-white font-semibold">{formatETA(etaSeconds)}</span></p>
+                <p className="text-sm text-[#888]">Progress: <span className="text-[#FF3B00] font-bold">{Math.floor(progress)}%</span></p>
             </div>
             <div className="w-full h-2 bg-[#222] mb-12 relative overflow-hidden border border-[#333]">
                 <motion.div className="absolute top-0 left-0 h-full bg-[#FF3B00]" style={{ width: `${progress}%` }} transition={{ ease: "linear" }} />
             </div>
+
             <div className="space-y-2 h-64 overflow-y-auto border border-[#333] p-4 bg-[#000]/50 backdrop-blur-sm">
                 {steps.map((step, i) => (
                     <motion.div key={step} initial={{ opacity: 0, x: -10 }} animate={{ opacity: i === currentStep ? 1 : 0.4, x: 0, color: i === currentStep ? "#FFF" : "#666" }} className="flex items-center gap-3 text-xs tracking-wider">
@@ -195,25 +141,6 @@ function AnalysisContent() {
                 ))}
             </div>
         </div>
-      </div>
-
-      {/* RIGHT SIDEBAR - LIVE TELEMETRY (NOW DYNAMIC) */}
-      <div className="w-80 bg-[#121212] border-l border-[#222] relative z-10 p-6 hidden lg:block">
-          <h3 className="text-xs font-bold tracking-[0.2em] text-[#FF3B00] mb-8 uppercase border-b border-[#333] pb-2">Live Telemetry</h3>
-          <TelemetryBlock label="CPU Load (Sandbox)" value={`${cpuLoad}% / 4 Cores`} />
-          <TelemetryBlock label="Memory Usage" value={`${memUsage}GB / 4GB`} />
-          <TelemetryBlock label="Network I/O" value={`↑ ${netUp}kbps ↓ ${netDown}kbps`} color="text-[#FF3B00]" />
-          <TelemetryBlock label="Active Threads" value={`${threads}`} />
-          <div className="mt-12 p-4 border border-[#333] bg-[#0A0A0A]">
-              <div className="text-[9px] text-gray-500 tracking-widest uppercase mb-2">Engine Log</div>
-              <div className="text-[10px] text-gray-400 space-y-1">
-                  {logEntries.map((entry, i) => (
-                      <p key={i} className={entry.isAlert ? "text-[#FF3B00]" : ""}>
-                          [{entry.time}] {entry.msg}
-                      </p>
-                  ))}
-              </div>
-          </div>
       </div>
     </div>
   )

@@ -1,9 +1,10 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { motion, useScroll, useTransform } from "framer-motion"
-import { UploadCloud, ArrowRight, Cpu, Network, Shield, Zap } from "lucide-react"
+import { UploadCloud, ArrowRight } from "lucide-react"
+import { Capacitor } from "@capacitor/core"
 import { submitFileForScan, submitUrlForScan } from "../lib/scan"
 
 // --- BACKGROUND PLACEHOLDER ---
@@ -14,42 +15,15 @@ const BackgroundMedia = () => (
   </div>
 )
 
-const FeatureItem = ({ icon: Icon, title, desc }: { icon: any, title: string, desc: string }) => (
-  <div className="flex flex-col gap-4 p-6 border border-gray-200 bg-white hover:border-[#FF3B00]/50 transition-colors group">
-    <div className="w-10 h-10 bg-[#121212] text-white flex items-center justify-center rounded-sm group-hover:bg-[#FF3B00] transition-colors">
-      <Icon size={20} />
-    </div>
-    <div>
-      <h3 className="text-sm font-bold uppercase tracking-widest mb-2">{title}</h3>
-      <p className="font-mono text-xs text-gray-500 leading-relaxed">{desc}</p>
-    </div>
-  </div>
-)
-
 export default function LandingPage() {
   const router = useRouter()
   const { scrollY } = useScroll()
   const yText = useTransform(scrollY, [0, 300], [0, -50])
   const yUpload = useTransform(scrollY, [0, 300], [0, -20])
-  
-  // Latency Logic
-  const [latency, setLatency] = useState<number | null>(null)
 
-  useEffect(() => {
-    const measureLatency = async () => {
-        try {
-            const start = performance.now()
-            await fetch('/', { method: 'HEAD', cache: 'no-store' })
-            const end = performance.now()
-            setLatency(Math.round(end - start))
-        } catch (e) {
-            setLatency(null)
-        }
-    }
-    measureLatency()
-    const interval = setInterval(measureLatency, 2000)
-    return () => clearInterval(interval)
-  }, [])
+  // Settings (backend URL) only matters in the packaged app — hidden on the
+  // website so visitors can't stumble into a control that does nothing there.
+  const [isNative] = useState(() => typeof window !== "undefined" && Capacitor.isNativePlatform())
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isUploading, setIsUploading] = useState(false)
@@ -99,11 +73,12 @@ export default function LandingPage() {
       <nav className="fixed top-0 w-full p-8 flex justify-between z-50 mix-blend-difference text-white/80 uppercase tracking-widest text-xs font-mono">
         <div className="flex items-center gap-3">
             <div className="w-3 h-3 bg-[#FF3B00]"></div>
-            <span className="font-bold">MalScan Pro // V.2.4</span>
+            <span className="font-bold">MalScan</span>
         </div>
         <div className="flex gap-6 items-center">
-            <span>LATENCY: {latency !== null ? `${latency}ms` : 'CALC...'}</span>
-            <button onClick={() => router.push('/settings')} className="hover:text-[#FF3B00] transition-colors">SETTINGS</button>
+            {isNative && (
+              <button onClick={() => router.push('/settings')} className="hover:text-[#FF3B00] transition-colors">SETTINGS</button>
+            )}
         </div>
       </nav>
       
@@ -169,22 +144,6 @@ export default function LandingPage() {
           {urlError && <p className="font-mono text-[10px] text-[#FF3B00] mt-2 tracking-wider">{urlError}</p>}
         </div>
       </main>
-
-      {/* FEATURE GRID */}
-      <section className="relative z-10 py-32 px-6 bg-[#F5F5F3] border-t border-gray-200">
-          <div className="max-w-7xl mx-auto">
-              <div className="mb-12">
-                  <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-gray-400 mb-2">Technical Specifications</h2>
-                  <h3 className="text-3xl font-medium tracking-tight">Engine Capabilities</h3>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-0">
-                  <FeatureItem icon={Cpu} title="Hybrid Analysis" desc="Combines static property extraction with limited, safe dynamic execution paths for behavioral telltales." />
-                  <FeatureItem icon={Network} title="Infra Mapping" desc="Recursively pivots on WHOIS, Passive DNS, and SSL certs to cluster related C2 infrastructure." />
-                  <FeatureItem icon={Shield} title="The Vault" desc="Artifacts are cryptographically hashed, renamed, and stored in a non-executable, air-gapped volume." />
-                  <FeatureItem icon={Zap} title="Rapid Triage" desc="Sub-60 second initial verdict generation using optimized YARA rulesets and heuristic scoring." />
-              </div>
-          </div>
-      </section>
     </div>
   )
 }

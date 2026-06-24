@@ -37,7 +37,9 @@ export function NativeIntentBridge() {
       try {
         const blob = await readSharedFileAsBlob(file.uri, file.mimeType)
         const jobId = await submitFileForScan(blob, file.name)
-        if (!cancelled) router.push(`/analysis?id=${jobId}`)
+        if (!cancelled) {
+          router.push(`/analysis?id=${jobId}&fileUri=${encodeURIComponent(file.uri)}&mimeType=${encodeURIComponent(file.mimeType)}`)
+        }
       } catch (e) {
         console.error("[MalScan] Failed to scan shared file:", e)
       }
@@ -73,9 +75,12 @@ export function NativeIntentBridge() {
           if (!cancelled) router.push(`/analysis?id=${jobId}&target=${encodeURIComponent(linkUrl)}`)
         } else {
           const name = decodeURIComponent(linkUrl.split("/").pop() || "scan_target")
-          const blob = await readSharedFileAsBlob(linkUrl, guessMimeFromName(name))
+          const mimeType = guessMimeFromName(name)
+          const blob = await readSharedFileAsBlob(linkUrl, mimeType)
           const jobId = await submitFileForScan(blob, name)
-          if (!cancelled) router.push(`/analysis?id=${jobId}`)
+          if (!cancelled) {
+            router.push(`/analysis?id=${jobId}&fileUri=${encodeURIComponent(linkUrl)}&mimeType=${encodeURIComponent(mimeType)}`)
+          }
         }
       } catch (e) {
         console.error("[MalScan] Failed to scan intercepted intent:", e)

@@ -1,8 +1,13 @@
+import { Capacitor } from "@capacitor/core"
+
 // Resolves where the FastAPI backend lives.
 //
-// Normal web deploy (npm run dev / next start): NEXT_PUBLIC_API_BASE_URL is
-// unset, so apiUrl() returns paths unchanged and next.config.ts's rewrite
-// proxies "/api/*" to the backend — exactly today's behaviour.
+// Normal web deploy (npm run dev / next start, or anyone just visiting the
+// site in a browser): always uses the relative "/api" path, full stop —
+// next.config.ts's rewrite proxies that to the backend. The localStorage
+// override below is intentionally never consulted here, even if a stray
+// value exists from earlier testing — that's what caused the website to
+// break by inheriting a backend URL meant only for the packaged app.
 //
 // Capacitor build (npm run build:capacitor): the app is static HTML/JS with
 // no Next.js server, so there's no rewrite proxy. NEXT_PUBLIC_API_BASE_URL is
@@ -14,7 +19,7 @@ const BUILD_TIME_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || ""
 const STORAGE_KEY = "malscan_api_base_url"
 
 export function getApiBaseUrl(): string {
-  if (typeof window !== "undefined") {
+  if (typeof window !== "undefined" && Capacitor.isNativePlatform()) {
     const stored = window.localStorage.getItem(STORAGE_KEY)
     if (stored) return stored
   }

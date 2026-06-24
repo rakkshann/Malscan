@@ -5,6 +5,10 @@ python-multipart==0.0.18
 python-dotenv==1.1.0
 requests==2.32.3
 pefile==2024.8.26
+playwright==1.60.0
+# After installing, also run: playwright install chromium
+# (headless Chromium used to render the HTML report to a real PDF — see
+# GET /report/{job_id}/pdf in main.py)
 
 # Threat intelligence (abuse.ch feeds — no key required)
 # MalwareBazaar, ThreatFox, URLhaus clients use requests (already listed above)
