@@ -13,7 +13,7 @@ Right now, the backend runs on `localhost`, which means a phone cannot reach it 
 
 ## Step 2: Initialize the Mobile Project
 We will create a new mobile application directory alongside the existing web and backend folders.
-1. **Project Scaffolding:** Run `npx create-expo-app@latest malscan-mobile` to create the React Native project.
+1. **Project Scaffolding:** Run `npx create-expo-app@latest mobile` to create the React Native project.
 2. **Install Core Dependencies:**
    *   `axios` (for API requests to the backend)
    *   `expo-intent-launcher` & `expo-sharing` (to handle passing safe files back to the OS)

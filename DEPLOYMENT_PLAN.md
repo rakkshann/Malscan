@@ -17,7 +17,7 @@ A release build has the JS baked in, so it runs anywhere.
 
 **Command:**
 ```powershell
-cd d:\MALSCAN\Malscan\malscan-mobile\android
+cd mobile\android
 .\gradlew assembleRelease
 ```
 
@@ -75,7 +75,7 @@ do Stage 2 first.
 
 **After deploy:** the app's default backend URL changes from the LAN IP to the
 Railway URL (e.g. `https://malscan-production.up.railway.app`). Update
-`malscan-mobile/constants/config.ts` default and/or set it in the app's Settings.
+`mobile/constants/config.ts` default and/or set it in the app's Settings.
 
 **Cost:** ~$5–10/month.
 

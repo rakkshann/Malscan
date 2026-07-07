@@ -38,7 +38,7 @@ from .security import sanitize_filename, cleanup_vault
 # Load .env from backend directory
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
