@@ -1,52 +1,50 @@
-# ── Python ────────────────────────────────────────────────────────────────────
+# ── Python (backend/) ──────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .env
 .env.*
+.pytest_cache/
 
-# ── Web app (malscan/) ────────────────────────────────────────────────────────
-malscan/node_modules/
-malscan/.next/
-malscan/out/
-malscan/build/
-malscan/next-env.d.ts
-malscan/*.tsbuildinfo
-malscan/package-lock.json
+# backend: never commit the live SQLite DB
+backend/*.db
+backend/app/*.db
 
-# Database — never commit the live SQLite DB
-malscan/backend/*.db
-malscan/backend/app/*.db
+# backend Vault — these are ACTUAL malware / suspicious files users uploaded
+backend/app/vault/*
+!backend/app/vault/.gitkeep
 
-# Vault — these are actual malware/suspicious files users uploaded
-malscan/backend/app/vault/*
-!malscan/backend/app/vault/.gitkeep
+# backend: generated HTML forensic reports
+backend/reports/
 
-# Generated HTML forensic reports
-malscan/reports/
+# backend: test/scratch helpers
+backend/generate_test_files.py
+backend/public_threat_test.txt
+backend/test_files/
 
-# Test/scratch files
-malscan/generate_test_files.py
-malscan/public_threat_test.txt
-malscan/test_files/
+# ── Frontend (frontend/) ───────────────────────────────────────────────────────
+# frontend/ also has its own .gitignore (Next.js defaults); these are a
+# belt-and-suspenders backstop for build output and dependencies.
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/next-env.d.ts
+frontend/*.tsbuildinfo
+frontend/package-lock.json
 
-# ── Mobile app (malscan-mobile/) ─────────────────────────────────────────────
-malscan-mobile/node_modules/
-malscan-mobile/.expo/
-malscan-mobile/android/build/
-malscan-mobile/android/app/build/
-malscan-mobile/android/.gradle/
-malscan-mobile/android/local.properties
-malscan-mobile/.next/
-
-# ── Root-level test/scratch files ────────────────────────────────────────────
+# ── Root-level test/scratch files ──────────────────────────────────────────────
 test_archive.zip
 eicar.txt
 *.zip
 Test files apk/
 
-# ── OS / IDE ──────────────────────────────────────────────────────────────────
+# ── Local-only notes (personal study/audit notes, not shipped) ─────────────────
+CODEBASE_WALKTHROUGH.md
+AUDIT_REPORT.md
+
+# ── OS / IDE ───────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 *.pem
