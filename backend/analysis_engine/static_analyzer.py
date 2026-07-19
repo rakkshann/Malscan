@@ -208,6 +208,7 @@ def analyze_pe(file_path: str, data: bytes = None) -> dict:
         "is_pe":               False,
         "imphash":             None,
         "suspicious_sections": [],
+        "pe_sections":         [],
         "file_entropy":        0.0,
         "magic_type":          "Unknown",
         "type_mismatch":       False,
@@ -238,7 +239,8 @@ def analyze_pe(file_path: str, data: bytes = None) -> dict:
 
         for section in pe.sections:
             name    = section.Name.decode("utf-8", errors="ignore").strip("\x00")
-            entropy = section.get_entropy()
+            entropy = round(section.get_entropy(), 3)
+            results["pe_sections"].append({"name": name, "entropy": entropy})
             if entropy > 7.5:
                 results["suspicious_sections"].append({
                     "name":   name,

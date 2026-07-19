@@ -171,6 +171,7 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
     try:
         job.status = "Processing"
         db.commit()
+        scan_started_at = time.time()
 
         # ── 1. Static Analysis ───────────────────────────────────────────────
         # Read the artifact once and reuse the bytes across analyzers, instead of
@@ -408,6 +409,7 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
             "file_hash": job.file_hash,
             "static": {
                 "suspicious_sections": pe_info.get("suspicious_sections", []),
+                "pe_sections":         pe_info.get("pe_sections", []),
                 "is_pe":               pe_info.get("is_pe", False),
                 "imphash":             pe_info.get("imphash"),
                 "file_entropy":        pe_info.get("file_entropy", 0.0),
@@ -433,22 +435,18 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
         score_data["clusters"] = cluster_result
         index_job_indicators(db, job_id, score_data)
 
-        # ── 6. Report Generation ─────────────────────────────────────────────
-        raw_meta = {
-            "file_hash":         job.file_hash,
-            "original_filename": original_filename,
-            "is_pe":             pe_info.get("is_pe", False),
-            "imphash":           pe_info.get("imphash"),
-            "suspicious_sections": pe_info.get("suspicious_sections", []),
-        }
-        generate_report(job_id, score_data, raw_meta)
-
-        # Merge file metadata into results so frontend can display them
+        # ── 6. Merge file metadata into results ──────────────────────────────
+        # Done BEFORE generate_report() so the saved HTML/PDF report sees the
+        # same enriched data the frontend does (pe_sections, apk_info,
+        # document_info, archive_contents, scan duration, etc.).
         score_data["file_hash"] = job.file_hash
         score_data["original_filename"] = original_filename
+        score_data["scan_duration_seconds"] = round(time.time() - scan_started_at, 2)
         if submitted_url:
             score_data["submitted_url"] = submitted_url
         score_data["imphash"]   = pe_info.get("imphash")
+        score_data["is_pe"]     = pe_info.get("is_pe", False)
+        score_data["pe_sections"] = pe_info.get("pe_sections", [])
         if archive_contents:
             score_data["archive_contents"] = archive_contents
         if apk_info.get("is_apk"):
@@ -457,6 +455,16 @@ def process_scan_job(job_id: str, file_path: str, original_filename: str = "unkn
             score_data["document_info"] = doc_info
         if yara_result.get("yara_matches"):
             score_data["yara_matches"] = yara_result["yara_matches"]
+
+        # ── 7. Report Generation ─────────────────────────────────────────────
+        raw_meta = {
+            "file_hash":         job.file_hash,
+            "original_filename": original_filename,
+            "is_pe":             pe_info.get("is_pe", False),
+            "imphash":           pe_info.get("imphash"),
+            "suspicious_sections": pe_info.get("suspicious_sections", []),
+        }
+        generate_report(job_id, score_data, raw_meta)
 
         job.results = score_data
         job.status  = "Completed"

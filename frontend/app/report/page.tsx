@@ -3,9 +3,14 @@
 import { useState, useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { motion } from "framer-motion"
-import { ShieldAlert, Download, Share2, TerminalSquare, Camera, ExternalLink, Home, Info, Check, Package, Archive, Smartphone, MapPin } from "lucide-react"
+import { ShieldAlert, Download, Share2, TerminalSquare, Camera, ExternalLink, Home, Info, Check, Package, Archive, Smartphone, MapPin, Network, Activity, PieChart, Radar } from "lucide-react"
 import dynamic from "next/dynamic"
 import { apiUrl } from "../../lib/config"
+import GraphWidget from "./GraphWidget"
+import RiskRadar from "./RiskRadar"
+import EntropyChart from "./EntropyChart"
+import VTDonut from "./VTDonut"
+import ScoreComposition from "./ScoreComposition"
 
 const GeoMap = dynamic(() => import("./GeoMap"), { ssr: false, loading: () => <div className="w-full h-[420px] bg-[#0d1117] flex items-center justify-center font-mono text-xs text-gray-600">LOADING MAP...</div> })
 
@@ -139,6 +144,12 @@ function ReportContent() {
     const geoCountryCode = reportData?.osint_summary?.country_code || ""
     const geoIsp = reportData?.osint_summary?.hosting || ""
     const geoAsn = reportData?.osint_summary?.asn || ""
+    const graphNodes = reportData?.graph_nodes || []
+    const graphEdges = reportData?.graph_edges || []
+    const riskProfile = reportData?.risk_profile || []
+    const scoreBreakdown = reportData?.score_breakdown || []
+    const isPe = reportData?.is_pe || false
+    const peSections = reportData?.pe_sections || []
 
     // Build IOC rows from real backend data
     const indicators = reportData?.indicators || {}
@@ -301,7 +312,8 @@ function ReportContent() {
             <main className="max-w-[1400px] mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8 mt-4 print:p-0 print:m-0 print:gap-6 print:!block">
 
                 {/* COL 1: VERDICT & SCORE */}
-                <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className={`lg:col-span-4 p-5 md:p-6 border border-gray-200 shadow-xl shadow-gray-200/30 flex flex-col h-fit rounded-lg transition-colors duration-500 ${themeColors.bg} print:mb-6`}>
+                <div className="lg:col-span-4 flex flex-col gap-6 print:!block">
+                <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className={`p-5 md:p-6 border border-gray-200 shadow-xl shadow-gray-200/30 flex flex-col h-fit rounded-lg transition-colors duration-500 ${themeColors.bg} print:mb-6`}>
                     <div>
                         {/* Glassmorphism glowing icon */}
                         <div className="relative mb-5 inline-block">
@@ -350,6 +362,14 @@ function ReportContent() {
                         </div>
                     </div>
 
+                    {/* Score Composition — point-weighted breakdown of the Executive Summary above */}
+                    <div className="mt-5 border-t border-black/10 pt-5">
+                        <h3 className={`text-[9px] font-bold mb-3 uppercase flex items-center gap-1.5 ${themeColors.textSub}`}>
+                            <PieChart size={10}/> Score Composition
+                        </h3>
+                        <ScoreComposition breakdown={scoreBreakdown} totalScore={threatScore} />
+                    </div>
+
                     {/* VirusTotal Vendor Consensus */}
                     {vtStats && (
                         <div className="mt-5 border-t border-black/10 pt-5">
@@ -370,14 +390,54 @@ function ReportContent() {
                                     <div className="flex items-center gap-1 text-gray-500"><div className="w-1.5 h-1.5 bg-gray-400 rounded-full" /> {vtStats.undetected} Undetected</div>
                                 )}
                             </div>
+                            <VTDonut stats={vtStats} />
                         </div>
                     )}
                 </motion.div>
 
-                <div className="lg:col-span-8 flex flex-col gap-6 md:gap-8 print:gap-6 print:!block">
+                {/* IOC TERMINAL — moved under the verdict card and shrunk so it
+                    reads as a quick-reference list rather than a full section. */}
+                <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.2 }} className="bg-[#121212] text-white border border-black p-4 font-mono shadow-xl rounded-lg print:break-inside-avoid">
+                    <div className="flex items-center gap-2 mb-3 pb-3 border-b border-white/20">
+                        <TerminalSquare className="text-[#FF3B00]" size={14} />
+                        <h3 className="text-[10px] font-bold tracking-[0.25em] uppercase text-gray-400">Extracted Indicators</h3>
+                    </div>
+                    <div className="max-h-48 print:max-h-none overflow-y-auto print:overflow-visible pr-2 print:pr-0 space-y-2.5 scrollbar-thin scrollbar-thumb-[#FF3B00] scrollbar-track-[#333]">
+                        {iocs.length === 0 ? (
+                            <div className="text-gray-500 text-[10px] tracking-wider py-4 text-center">NO NETWORK INDICATORS EXTRACTED.</div>
+                        ) : iocs.map((ioc, i) => (
+                            <div key={i} className="flex flex-col gap-0.5 pb-2 border-b border-white/10 last:border-0">
+                                <span className="text-[8px] text-[#FF3B00] tracking-widest uppercase">{ioc.type}</span>
+                                <span className="text-[10px] truncate print:whitespace-normal print:break-all print:overflow-visible" title={ioc.val}>{ioc.val}</span>
+                            </div>
+                        ))}
+                    </div>
+                </motion.div>
+                </div>
+
+                <div className="lg:col-span-8 grid grid-cols-1 md:grid-cols-2 gap-6 print:gap-6 print:!block items-start">
+                    {/* RISK PROFILE RADAR */}
+                    {riskProfile.length > 0 && (
+                        <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.05 }} className="bg-white border border-gray-200 shadow-sm rounded-lg overflow-hidden print:break-inside-avoid print:shadow-none print:mb-6">
+                            <div className="p-4 border-b border-gray-200 bg-gray-50">
+                                <h3 className="text-xs font-bold tracking-[0.2em] uppercase flex items-center gap-2"><Radar size={14} className="text-[#FF3B00]" /> Risk Profile</h3>
+                            </div>
+                            <RiskRadar axes={riskProfile} />
+                        </motion.div>
+                    )}
+
+                    {/* INFRASTRUCTURE GRAPH — paired with Risk Profile above; both are
+                        compact node/chart visuals that read well side by side. */}
+                    <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.12 }} className="bg-white border border-gray-200 shadow-sm rounded-lg overflow-hidden print:break-inside-avoid print:shadow-none print:mb-6">
+                        <div className="p-4 border-b border-gray-200 bg-gray-50">
+                            <h3 className="text-xs font-bold tracking-[0.2em] uppercase flex items-center gap-2"><Network size={14} className="text-[#FF3B00]" /> Infrastructure Graph</h3>
+                        </div>
+                        <GraphWidget nodes={graphNodes} edges={graphEdges} originLabel={targetLabel} />
+                    </motion.div>
+
                     {/* URLScan.io Sandbox Result */}
                     {urlscanData && !urlscanData.error && (
-                        <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.15 }} className="bg-white border border-gray-200 shadow-sm overflow-hidden rounded-lg print:mb-6">
+                        <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.15 }} className="md:col-span-2 bg-white border border-gray-200 shadow-sm overflow-hidden rounded-lg print:mb-6">
                             <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
                                 <h3 className="text-xs font-bold tracking-[0.2em] uppercase flex items-center gap-2"><Camera size={14} className="text-[#FF3B00]" /> URLScan Sandbox Result</h3>
                                 {urlscanData.is_malicious && <span className="text-[9px] bg-red-900 text-[#FF3B00] px-2 py-1 font-mono uppercase tracking-widest animate-pulse rounded-sm">MALICIOUS</span>}
@@ -419,7 +479,7 @@ function ReportContent() {
 
                     {/* URLScan info banner when sandbox is unavailable */}
                     {urlscanData && urlscanData.error && (
-                        <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.15 }} className="flex items-start gap-3 px-4 py-3 bg-gray-50 border border-gray-200 text-gray-500">
+                        <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.15 }} className="md:col-span-2 flex items-start gap-3 px-4 py-3 bg-gray-50 border border-gray-200 text-gray-500">
                             <Info size={14} className="mt-0.5 shrink-0 text-gray-400" />
                             <div>
                                 <p className="text-[10px] font-bold uppercase tracking-widest mb-0.5">Sandbox Skipped</p>
@@ -489,8 +549,28 @@ function ReportContent() {
                         </motion.div>
                     )}
 
+                    {/* FILE ENTROPY BY SECTION — shown for any uploaded file (not URL
+                        submissions, where it's simply inapplicable) so a non-PE file
+                        explains itself instead of the card silently disappearing. */}
+                    {!submittedUrl && !interceptedUrl && (
+                        <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.27 }} className="bg-white border border-gray-200 shadow-sm rounded-lg overflow-hidden print:break-inside-avoid print:shadow-none">
+                            <div className="p-4 border-b border-gray-200 bg-gray-50">
+                                <h3 className="text-xs font-bold tracking-[0.2em] uppercase flex items-center gap-2"><Activity size={14} className="text-[#FF3B00]" /> File Entropy by Section</h3>
+                            </div>
+                            <div className="p-4 md:p-5">
+                                {isPe && peSections.length > 0 ? (
+                                    <EntropyChart sections={peSections} />
+                                ) : (
+                                    <p className="text-[10px] font-mono text-gray-400 leading-relaxed">
+                                        This analysis only applies to Windows PE executables (.exe/.dll), which are broken into named sections like .text and .rsrc. &quot;{originalFilename}&quot; isn&apos;t a PE file, so there are no sections to chart.
+                                    </p>
+                                )}
+                            </div>
+                        </motion.div>
+                    )}
+
                     {/* THREAT ORIGIN GEO-MAP */}
-                    <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.1 }} className="bg-[#0d1117] border border-gray-800 shadow-sm overflow-hidden rounded-lg print:break-inside-avoid print:mb-6">
+                    <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.1 }} className="md:col-span-2 bg-[#0d1117] border border-gray-800 shadow-sm overflow-hidden rounded-lg print:break-inside-avoid print:mb-6">
                         <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-[#0d1117]">
                             <h3 className="text-xs font-bold tracking-[0.2em] uppercase flex items-center gap-2 text-gray-300"><MapPin size={14} className="text-[#FF3B00]" /> Threat Origin</h3>
                             <div className="flex gap-4">
@@ -499,29 +579,6 @@ function ReportContent() {
                             </div>
                         </div>
                         <GeoMap lat={geoLat} lon={geoLon} city={geoCity} region={geoRegion} country={geoCountry} countryCode={geoCountryCode} isp={geoIsp} asn={geoAsn} ips={indicators.ips || []} />
-                    </motion.div>
-                    
-
-
-                    {/* IOC TERMINAL */}
-                    <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.2 }} className="bg-[#121212] text-white border border-black p-4 md:p-6 font-mono shadow-xl rounded-lg print:break-inside-avoid">
-                        <div className="flex items-center gap-3 mb-6 pb-4 border-b border-white/20">
-                            <TerminalSquare className="text-[#FF3B00]" size={20} />
-                            <h3 className="text-xs font-bold tracking-[0.3em] uppercase text-gray-400">Extracted Indicators (IOCs)</h3>
-                        </div>
-                        <div className="h-64 print:h-auto overflow-y-auto print:overflow-visible pr-2 md:pr-4 print:pr-0 space-y-4 scrollbar-thin scrollbar-thumb-[#FF3B00] scrollbar-track-[#333]">
-                            {iocs.length === 0 ? (
-                                <div className="text-gray-500 text-xs tracking-wider py-8 text-center">NO NETWORK INDICATORS EXTRACTED FROM THIS ARTIFACT.</div>
-                            ) : iocs.map((ioc, i) => (
-                                <div key={i} className="flex flex-col sm:flex-row sm:items-start justify-between gap-2 pb-3 border-b border-white/10 last:border-0">
-                                    <div className="flex items-start gap-4 min-w-0">
-                                        <span className="text-[9px] text-[#FF3B00] tracking-widest uppercase w-16 shrink-0 mt-1">{ioc.type}</span>
-                                        <span className="text-xs md:text-sm truncate print:whitespace-normal print:break-all print:overflow-visible" title={ioc.val}>{ioc.val}</span>
-                                    </div>
-                                    <span className="text-[9px] bg-white/10 px-2 py-1 rounded-sm tracking-wider uppercase text-gray-400 shrink-0 self-start sm:self-auto">{ioc.tag}</span>
-                                </div>
-                            ))}
-                        </div>
                     </motion.div>
                 </div>
 

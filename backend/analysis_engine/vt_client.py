@@ -13,13 +13,32 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _extract_detections(attrs: dict, limit: int = 10) -> list:
+    """Pulls named vendor verdicts out of VT's per-engine results.
+
+    Completed /files or /urls lookups expose this as 'last_analysis_results';
+    the /analyses/{id} polling endpoint calls the same shape 'results'. Either
+    way it's a dict of {engine_name: {category, result, ...}} — this keeps
+    only the vendors that actually flagged something (malicious/suspicious),
+    so the report can show real AV names instead of just totals.
+    """
+    results = attrs.get("last_analysis_results") or attrs.get("results") or {}
+    detections = [
+        {"vendor": name, "result": info.get("result") or info.get("category", "flagged")}
+        for name, info in results.items()
+        if info.get("category") in ("malicious", "suspicious")
+    ]
+    return detections[:limit]
+
+
 def get_url_report(url: str, api_key: str) -> dict:
     """
     Queries VirusTotal for a URL report. If no report exists, submits
     the URL for scanning and polls for results.
 
-    Returns dict with 'stats' (malicious/suspicious/harmless/undetected counts)
-    and 'reputation' score, or an 'error' key on failure.
+    Returns dict with 'stats' (malicious/suspicious/harmless/undetected counts),
+    'detections' (named vendor verdicts) and 'reputation' score, or an 'error'
+    key on failure.
     """
     if not api_key:
         return {"error": "No VT API key provided"}
@@ -36,6 +55,7 @@ def get_url_report(url: str, api_key: str) -> dict:
             attrs = response.json().get("data", {}).get("attributes", {})
             return {
                 "stats": attrs.get("last_analysis_stats", {}),
+                "detections": _extract_detections(attrs),
                 "reputation": attrs.get("reputation", 0),
             }
 
@@ -60,7 +80,11 @@ def get_url_report(url: str, api_key: str) -> dict:
                     if poll.status_code == 200:
                         attrs = poll.json().get("data", {}).get("attributes", {})
                         if attrs.get("status") == "completed":
-                            return {"stats": attrs.get("stats", {}), "reputation": 0}
+                            return {
+                                "stats": attrs.get("stats", {}),
+                                "detections": _extract_detections(attrs),
+                                "reputation": 0,
+                            }
                 return {"status": "queued", "message": "VT analysis still pending."}
             return {"error": f"VT submit failed (HTTP {submit_res.status_code})"}
 
@@ -137,6 +161,7 @@ def upload_file(file_path: str, api_key: str) -> dict:
                 if attrs.get("status") == "completed":
                     return {
                         "stats": attrs.get("stats", {}),
+                        "detections": _extract_detections(attrs),
                         "reputation": 0,
                         "uploaded": True,
                     }
@@ -172,6 +197,7 @@ def get_file_report(file_hash: str, api_key: str, file_path: str = None) -> dict
             attrs = response.json().get("data", {}).get("attributes", {})
             return {
                 "stats": attrs.get("last_analysis_stats", {}),
+                "detections": _extract_detections(attrs),
                 "reputation": attrs.get("reputation", 0),
                 "type_description": attrs.get("type_description"),
                 "meaningful_name": attrs.get("meaningful_name"),

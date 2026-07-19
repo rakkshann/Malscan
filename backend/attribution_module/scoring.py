@@ -26,9 +26,11 @@ Output shape (stored in ScanJob.results JSON column):
     "verdict":       "Malicious" | "Suspicious" | "Clear",
     "reasons":       [str],
     "indicators":    {"ips": [...], "domains": [...], "urls": [...]},
-    "osint_summary": {"registrar", "asn", "country", "hosting", "domain_age_days"},
+    "osint_summary": {"registrar", "asn", "country", "hosting", "domain_age_days", "virustotal_detections"},
     "graph_nodes":   [...],
     "graph_edges":   [...],
+    "score_breakdown": [{"label": str, "points": int}],
+    "risk_profile":    [{"key": str, "label": str, "value": int, "description": str}],
 }
 """
 
@@ -135,6 +137,76 @@ def _build_graph(iocs: dict, geoip: dict, whois: dict):
             edges.append({"source": domain, "target": reg_id, "relationship": "registered_with"})
 
     return list(nodes.values()), edges
+
+
+# ── Risk profile (radar chart) ───────────────────────────────────────────────
+# Every score_breakdown label maps to exactly one of these five axes.
+
+RISK_AXES = [
+    {
+        "key": "file_reputation",
+        "label": "File Reputation",
+        "description": "How this file scores against known-malware hash lists and its own static structure (type mismatches, suspicious strings).",
+    },
+    {
+        "key": "network_reputation",
+        "label": "Network Reputation",
+        "description": "How the IPs, domains, and URLs this artifact talks to are rated by threat-intel feeds and multi-vendor scanners like VirusTotal.",
+    },
+    {
+        "key": "hosting_risk",
+        "label": "Hosting Risk",
+        "description": "How risky the underlying infrastructure is — registrar reputation and the ASN/ISP any network indicators are hosted behind.",
+    },
+    {
+        "key": "behavioral_signals",
+        "label": "Behavioral Signals",
+        "description": "Signs of active malicious behavior — YARA pattern matches, packed/encrypted PE sections, macros or scripts, dangerous app permissions.",
+    },
+    {
+        "key": "domain_age_risk",
+        "label": "Domain Age Risk",
+        "description": "How newly registered any associated domain is — brand-new domains are disproportionately used in phishing and malware campaigns.",
+    },
+]
+
+_LABEL_TO_AXIS = {
+    "Known Malicious Hash Match":               "file_reputation",
+    "MalwareBazaar Hash Match":                 "file_reputation",
+    "File Structure Analysis":                  "file_reputation",
+    "YARA Rule Matches":                        "behavioral_signals",
+    "PE Section Entropy":                       "behavioral_signals",
+    "Document Threat Analysis":                 "behavioral_signals",
+    "APK Permissions":                          "behavioral_signals",
+    "ThreatFox IOC Match":                      "network_reputation",
+    "URLhaus Malware Distribution":             "network_reputation",
+    "AbuseIPDB Abuse Confidence":               "network_reputation",
+    "VirusTotal Consensus":                     "network_reputation",
+    "Benign VirusTotal Consensus (reduction)":  "network_reputation",
+    "URLScan Verdict":                          "network_reputation",
+    "IOC Volume":                               "network_reputation",
+    "URL Anomalies":                            "network_reputation",
+    "Registrar Reputation":                     "hosting_risk",
+    "Hosting / ASN Risk":                       "hosting_risk",
+    "Domain Age Risk":                          "domain_age_risk",
+}
+
+
+def _build_risk_profile(score_breakdown: list) -> list:
+    totals = {axis["key"]: 0 for axis in RISK_AXES}
+    for entry in score_breakdown:
+        axis_key = _LABEL_TO_AXIS.get(entry["label"])
+        if axis_key:
+            totals[axis_key] += entry["points"]
+    return [
+        {
+            "key":         axis["key"],
+            "label":       axis["label"],
+            "description": axis["description"],
+            "value":       max(0, min(100, totals[axis["key"]])),
+        }
+        for axis in RISK_AXES
+    ]
 
 
 # ── Scoring checks ───────────────────────────────────────────────────────────
@@ -484,8 +556,13 @@ def calculate_score(analysis_data: dict) -> dict:
     dns   = osint.get("dns", {})   or {}
 
     all_reasons = []
+    score_breakdown = []
     family, attribution = None, None
     age = None  # populated by heuristic score path only
+
+    def record(label, points):
+        if points:
+            score_breakdown.append({"label": label, "points": points})
 
     # Confirmed threat-intel evidence and heuristic suspicion are tracked
     # separately: a clean VirusTotal consensus may dampen heuristics, but it
@@ -500,32 +577,49 @@ def calculate_score(analysis_data: dict) -> dict:
     if hash_score > 0:
         intel_total += hash_score; all_reasons += hash_reasons
         family = hash_family; attribution = hash_attribution
+    record("Known Malicious Hash Match", hash_score)
 
     # MalwareBazaar (external, authoritative hash DB)
     s, r = _check_malwarebazaar(osint); intel_total += s; all_reasons += r
+    record("MalwareBazaar Hash Match", s)
 
     # YARA rule matches (pattern-based, very high confidence)
     s, r = _check_yara(osint); intel_total += s; all_reasons += r
+    record("YARA Rule Matches", s)
 
     # ── Tier 2: IOC-based threat intelligence ─────────────────────────────────
     s, r = _check_threatfox(osint);  intel_total += s; all_reasons += r
+    record("ThreatFox IOC Match", s)
     s, r = _check_urlhaus(osint);    intel_total += s; all_reasons += r
+    record("URLhaus Malware Distribution", s)
     s, r = _check_abuseipdb(osint);  intel_total += s; all_reasons += r
+    record("AbuseIPDB Abuse Confidence", s)
 
     # ── Tier 3: Document-specific threats ─────────────────────────────────────
     s, r = _check_document_threats(analysis_data.get("document", {})); heuristic_total += s; all_reasons += r
+    record("Document Threat Analysis", s)
 
     # ── Tier 4: Heuristic signals (always run) ────────────────────────────────
     s, r      = _check_enhanced_static(static);    heuristic_total += s; all_reasons += r
+    record("File Structure Analysis", s)
     s, r      = _check_pe_sections(static);        heuristic_total += s; all_reasons += r
+    record("PE Section Entropy", s)
     s, r, age = _check_domain_age(whois);          heuristic_total += s; all_reasons += r
+    record("Domain Age Risk", s)
     s, r      = _check_registrar(whois);           heuristic_total += s; all_reasons += r
+    record("Registrar Reputation", s)
     s, r      = _check_geoip(geoip);               heuristic_total += s; all_reasons += r
+    record("Hosting / ASN Risk", s)
     s, r      = _check_url_flags(url_data);        heuristic_total += s; all_reasons += r
+    record("URL Anomalies", s)
     s, r      = _check_ioc_volume(iocs);           heuristic_total += s; all_reasons += r
+    record("IOC Volume", s)
     s, r      = _check_virustotal(osint);          intel_total += s; all_reasons += r
+    record("VirusTotal Consensus", s)
     s, r      = _check_urlscan(osint);             heuristic_total += s; all_reasons += r
+    record("URLScan Verdict", s)
     s, r      = _check_apk_permissions(analysis_data.get("apk", {})); heuristic_total += s; all_reasons += r
+    record("APK Permissions", s)
 
     # ── Benign-consensus dampening ────────────────────────────────────────────
     # If a broad VirusTotal scan (40+ engines) found NOTHING, halve the purely
@@ -540,13 +634,18 @@ def calculate_score(analysis_data: dict) -> dict:
         and vt_stats.get("malicious", 0) == 0
         and vt_stats.get("suspicious", 0) == 0
     ):
+        reduction = heuristic_total - heuristic_total // 2
         heuristic_total = heuristic_total // 2
+        record("Benign VirusTotal Consensus (reduction)", -reduction)
         all_reasons.append(
             f"Reassuring signal: {vt_engines} antivirus engines on VirusTotal scanned this and none flagged it — risk score reduced accordingly."
         )
 
     final_score = min(intel_total + heuristic_total, 100)
     verdict = "Malicious" if final_score >= 70 else "Suspicious" if final_score >= 35 else "Clear"
+
+    score_breakdown.sort(key=lambda e: e["points"], reverse=True)
+    risk_profile = _build_risk_profile(score_breakdown)
 
     graph_nodes, graph_edges = _build_graph(iocs, geoip, whois)
 
@@ -574,8 +673,11 @@ def calculate_score(analysis_data: dict) -> dict:
             "region":          geoip.get("region"),
             "dns_a_records":   dns.get("A", []),
             "virustotal":      osint.get("virustotal", {}).get("stats") if "virustotal" in osint else None,
+            "virustotal_detections": osint.get("virustotal", {}).get("detections", []) if "virustotal" in osint else [],
             "urlscan":         osint.get("urlscan") if "urlscan" in osint else None,
         },
         "graph_nodes": graph_nodes,
         "graph_edges": graph_edges,
+        "score_breakdown": score_breakdown,
+        "risk_profile":    risk_profile,
     }
